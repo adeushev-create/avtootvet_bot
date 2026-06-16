@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Secretary CRM</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
+<style>
+  :root {
+    --bg: var(--tg-theme-bg-color, #ffffff);
+    --text: var(--tg-theme-text-color, #111111);
+    --hint: var(--tg-theme-hint-color, #888888);
+    --button: var(--tg-theme-button-color, #2678b6);
+    --button-text: var(--tg-theme-button-text-color, #ffffff);
+    --secondary-bg: var(--tg-theme-secondary-bg-color, #f4f4f5);
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: -apple-system, system-ui, sans-serif; background: var(--bg); color: var(--text); }
+  header {
+    padding: 12px 16px; display: flex; gap: 8px;
+    border-bottom: 1px solid var(--secondary-bg);
+    position: sticky; top: 0; background: var(--bg); z-index: 10;
+  }
+  .tab-btn { flex: 1; padding: 8px; border: none; border-radius: 10px; background: var(--secondary-bg); color: var(--text); font-size: 14px; }
+  .tab-btn.active { background: var(--button); color: var(--button-text); }
+  main { padding: 12px 16px 80px; }
+  .tab-panel { display: none; }
+  .tab-panel.active { display: block; }
+  .card { background: var(--secondary-bg); border-radius: 12px; padding: 12px; margin-bottom: 10px; }
+  .card h3 { margin: 0 0 4px; font-size: 15px; }
+  .card .meta { color: var(--hint); font-size: 12px; }
+  .tag-chip { display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: 10px; color: #fff; margin: 4px 4px 0 0; }
+  .stat-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 14px; }
+  .stat-box { background: var(--secondary-bg); border-radius: 12px; padding: 10px; text-align: center; }
+  .stat-box .num { font-size: 20px; font-weight: 700; }
+  .stat-box .label { font-size: 11px; color: var(--hint); }
+  input, textarea { width: 100%; padding: 8px; border-radius: 8px; border: 1px solid var(--secondary-bg); background: var(--bg); color: var(--text); margin-bottom: 8px; font-size: 14px; }
+  button.primary { background: var(--button); color: var(--button-text); border: none; padding: 10px; border-radius: 8px; width: 100%; font-size: 14px; }
+  .task-row { display: flex; align-items: flex-start; gap: 8px; }
+  .task-row.done { opacity: 0.5; text-decoration: line-through; }
+  .empty { color: var(--hint); font-size: 13px; text-align: center; padding: 20px 0; }
+  h3.section-title { font-size: 14px; color: var(--hint); margin: 16px 0 8px; }
+</style>
+</head>
+<body>
+
+<header>
+  <button class="tab-btn active" data-tab="contacts">Контакты</button>
+  <button class="tab-btn" data-tab="tasks">Задачи</button>
+  <button class="tab-btn" data-tab="stats">Статистика</button>
+</header>
+
+<main>
+  <section id="tab-contacts" class="tab-panel active">
+    <div id="contacts-list"><div class="empty">Загрузка...</div></div>
+  </section>
+
+  <section id="tab-tasks" class="tab-panel">
+    <div class="card">
+      <input id="task-title" placeholder="Текст задачи" />
+      <input id="task-due" type="datetime-local" />
+      <button class="primary" onclick="createTask()">Добавить задачу</button>
+    </div>
+    <div id="tasks-list"><div class="empty">Загрузка...</div></div>
+  </section>
+
+  <section id="tab-stats" class="tab-panel">
+    <div class="stat-grid" id="stat-grid"></div>
+    <h3 class="section-title">Сообщения за 7 дней</h3>
+    <canvas id="chart-by-day" height="160"></canvas>
+    <h3 class="section-title">Сегменты</h3>
+    <canvas id="chart-tags" height="160"></canvas>
+  </section>
+</main>
+
+<script>
+const tg = window.Telegram?.WebApp;
+tg?.ready();
+tg?.expand();
+
+const API_BASE = window.location.origin;
+const initData = tg?.initData || "";
+
+async function api(path, options = {}) {
+  const res = await fetch(API_BASE + path, {
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      "X-Telegram-Init-Data": initData,
+      ...(options.headers || {}),
+    },
+  });
+  if (!res.ok) throw new Error(`API ${path} -> ${res.status}`);
+  return res.json();
+}
+
+document.querySelectorAll(".tab-btn").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    document.querySelectorAll(".tab-btn").forEach((b) => b.classList.remove("active"));
+    document.querySelectorAll(".tab-panel").forEach((p) => p.classList.remove("active"));
+    btn.classList.add("active");
+    document.getElementById("tab-" + btn.dataset.tab).classList.add("active");
+  });
+});
+
+function escapeHtml(str) {
+  return (str || "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+async function loadContacts() {
+  const el = document.getElementById("contacts-list");
+  try {
+    const contacts = await api("/api/contacts");
+    if (!contacts.length) {
+      el.innerHTML = '<div class="empty">Пока нет контактов</div>';
+      return;
+    }
+    el.innerHTML = contacts
+      .map(
+        (c) => `
+      <div class="card">
+        <h3>${escapeHtml(c.first_name || "")} ${escapeHtml(c.last_name || "")} ${c.username ? "@" + escapeHtml(c.username) : ""}</h3>
+        <div class="meta">${c.message_count} сообщ. · последнее: ${escapeHtml(c.last_message || "")}</div>
+        <div>${(c.tags || []).map((t) => `<span class="tag-chip" style="background:${t.color}">${escapeHtml(t.name)}</span>`).join("")}</div>
+      </div>
+    `
+      )
+      .join("");
+  } catch (e) {
+    el.innerHTML = '<div class="empty">Ошибка загрузки. Открой через кнопку бота, не напрямую в браузере.</div>';
+  }
+}
+
+async function loadTasks() {
+  const el = document.getElementById("tasks-list");
+  try {
+    const tasks = await api("/api/tasks");
+    if (!tasks.length) {
+      el.innerHTML = '<div class="empty">Задач нет</div>';
+      return;
+    }
+    el.innerHTML = tasks
+      .map(
+        (t) => `
+      <div class="card task-row ${t.status === "done" ? "done" : ""}">
+        <input type="checkbox" ${t.status === "done" ? "checked" : ""} onchange="toggleTask(${t.id}, this.checked)" />
+        <div>
+          <div>${escapeHtml(t.title)}</div>
+          <div class="meta">${t.due_at ? new Date(t.due_at).toLocaleString() : "без срока"}</div>
+        </div>
+      </div>
+    `
+      )
+      .join("");
+  } catch (e) {
+    el.innerHTML = '<div class="empty">Ошибка загрузки</div>';
+  }
+}
+
+async function toggleTask(id, checked) {
+  await api(`/api/tasks/${id}`, { method: "PATCH", body: JSON.stringify({ status: checked ? "done" : "open" }) });
+  loadTasks();
+}
+
+async function createTask() {
+  const title = document.getElementById("task-title").value.trim();
+  const due = document.getElementById("task-due").value;
+  if (!title) return;
+  await api("/api/tasks", {
+    method: "POST",
+    body: JSON.stringify({ title, due_at: due ? new Date(due).toISOString() : null }),
+  });
+  document.getElementById("task-title").value = "";
+  document.getElementById("task-due").value = "";
+  loadTasks();
+}
+
+async function loadStats() {
+  try {
+    const stats = await api("/api/stats");
+    document.getElementById("stat-grid").innerHTML = `
+      <div class="stat-box"><div class="num">${stats.total_contacts}</div><div class="label">контактов</div></div>
+      <div class="stat-box"><div class="num">${stats.total_messages}</div><div class="label">сообщений</div></div>
+      <div class="stat-box"><div class="num">${stats.open_tasks}</div><div class="label">открытых задач</div></div>
+    `;
+
+    new Chart(document.getElementById("chart-by-day"), {
+      type: "bar",
+      data: {
+        labels: stats.messages_by_day.map((d) => d.d),
+        datasets: [{ label: "сообщений в день", data: stats.messages_by_day.map((d) => d.c), backgroundColor: "#2678b6" }],
+      },
+      options: { plugins: { legend: { display: false } } },
+    });
+
+    new Chart(document.getElementById("chart-tags"), {
+      type: "doughnut",
+      data: {
+        labels: stats.tag_distribution.map((t) => t.name),
+        datasets: [{ data: stats.tag_distribution.map((t) => t.cnt) }],
+      },
+    });
+  } catch (e) {
+    console.error(e);
+  }
+}
+
+loadContacts();
+loadTasks();
+loadStats();
+</script>
+</body>
+</html>
