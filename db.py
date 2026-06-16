@@ -19,6 +19,13 @@ def get_conn():
         conn.close()
 
 
+def _ensure_column(conn: sqlite3.Connection, table: str, column: str, ddl: str) -> None:
+    """Добавляет колонку, если её ещё нет — безопасно для уже существующей базы на Volume."""
+    existing = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+    if column not in existing:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {ddl}")
+
+
 def init_db() -> None:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     with get_conn() as conn:
@@ -78,6 +85,10 @@ def init_db() -> None:
             )
             """
         )
+        # миграции для уже существующих баз (на Railway Volume и т.п.)
+        _ensure_column(conn, "contacts", "archived", "archived INTEGER DEFAULT 0")
+        _ensure_column(conn, "tasks", "source", "source TEXT DEFAULT 'manual'")
+        _ensure_column(conn, "messages", "business_connection_id", "business_connection_id TEXT")
 
 
 # --- контакты ---
@@ -99,14 +110,17 @@ def upsert_contact(chat_id: int, username: str | None, first_name: str | None, l
             )
 
 
-def list_contacts() -> list[dict]:
+def list_contacts(include_archived: bool = False) -> list[dict]:
     with get_conn() as conn:
+        where = "" if include_archived else "WHERE c.archived = 0"
         rows = conn.execute(
-            """
-            SELECT c.chat_id, c.username, c.first_name, c.last_name, c.last_seen, c.notes,
+            f"""
+            SELECT c.chat_id, c.username, c.first_name, c.last_name, c.last_seen, c.notes, c.archived,
                    (SELECT content FROM messages m WHERE m.chat_id = c.chat_id ORDER BY m.id DESC LIMIT 1) AS last_message,
+                   (SELECT created_at FROM messages m WHERE m.chat_id = c.chat_id ORDER BY m.id DESC LIMIT 1) AS last_message_at,
                    (SELECT COUNT(*) FROM messages m WHERE m.chat_id = c.chat_id) AS message_count
             FROM contacts c
+            {where}
             ORDER BY c.last_seen DESC
             """
         ).fetchall()
@@ -124,16 +138,46 @@ def list_contacts() -> list[dict]:
         return result
 
 
+def get_contact(chat_id: int) -> dict | None:
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM contacts WHERE chat_id = ?", (chat_id,)).fetchone()
+        if not row:
+            return None
+        tags = conn.execute(
+            """
+            SELECT t.id, t.name, t.color FROM tags t
+            JOIN contact_tags ct ON ct.tag_id = t.id
+            WHERE ct.chat_id = ?
+            """,
+            (chat_id,),
+        ).fetchall()
+        return {**dict(row), "tags": [dict(t) for t in tags]}
+
+
 def update_contact_notes(chat_id: int, notes: str) -> None:
     with get_conn() as conn:
         conn.execute("UPDATE contacts SET notes = ? WHERE chat_id = ?", (notes, chat_id))
+
+
+def set_contact_archived(chat_id: int, archived: bool) -> None:
+    with get_conn() as conn:
+        conn.execute("UPDATE contacts SET archived = ? WHERE chat_id = ?", (1 if archived else 0, chat_id))
 
 
 # --- теги / сегменты ---
 
 def list_tags() -> list[dict]:
     with get_conn() as conn:
-        return [dict(r) for r in conn.execute("SELECT * FROM tags").fetchall()]
+        rows = conn.execute(
+            """
+            SELECT t.id, t.name, t.color, COUNT(ct.chat_id) AS contact_count
+            FROM tags t
+            LEFT JOIN contact_tags ct ON ct.tag_id = t.id
+            GROUP BY t.id
+            ORDER BY t.name
+            """
+        ).fetchall()
+        return [dict(r) for r in rows]
 
 
 def create_tag(name: str, color: str = "#888888") -> int:
@@ -141,6 +185,20 @@ def create_tag(name: str, color: str = "#888888") -> int:
         conn.execute("INSERT OR IGNORE INTO tags (name, color) VALUES (?, ?)", (name, color))
         row = conn.execute("SELECT id FROM tags WHERE name = ?", (name,)).fetchone()
         return row["id"]
+
+
+def update_tag(tag_id: int, name: str | None = None, color: str | None = None) -> None:
+    with get_conn() as conn:
+        if name is not None:
+            conn.execute("UPDATE tags SET name = ? WHERE id = ?", (name, tag_id))
+        if color is not None:
+            conn.execute("UPDATE tags SET color = ? WHERE id = ?", (color, tag_id))
+
+
+def delete_tag(tag_id: int) -> None:
+    with get_conn() as conn:
+        conn.execute("DELETE FROM contact_tags WHERE tag_id = ?", (tag_id,))
+        conn.execute("DELETE FROM tags WHERE id = ?", (tag_id,))
 
 
 def set_contact_tags(chat_id: int, tag_ids: list[int]) -> None:
@@ -152,12 +210,24 @@ def set_contact_tags(chat_id: int, tag_ids: list[int]) -> None:
 
 # --- сообщения ---
 
-def add_message(chat_id: int, role: str, content: str, mode: str = "auto") -> None:
+def add_message(chat_id: int, role: str, content: str, mode: str = "auto", business_connection_id: str | None = None) -> int:
     with get_conn() as conn:
-        conn.execute(
-            "INSERT INTO messages (chat_id, role, content, mode) VALUES (?, ?, ?, ?)",
-            (chat_id, role, content, mode),
+        cur = conn.execute(
+            "INSERT INTO messages (chat_id, role, content, mode, business_connection_id) VALUES (?, ?, ?, ?, ?)",
+            (chat_id, role, content, mode, business_connection_id),
         )
+        return cur.lastrowid
+
+
+def get_message(message_id: int) -> dict | None:
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM messages WHERE id = ?", (message_id,)).fetchone()
+        return dict(row) if row else None
+
+
+def update_message_mode(message_id: int, mode: str) -> None:
+    with get_conn() as conn:
+        conn.execute("UPDATE messages SET mode = ? WHERE id = ?", (mode, message_id))
 
 
 def get_history(chat_id: int, limit: int = 10) -> list[dict]:
@@ -173,7 +243,7 @@ def get_history(chat_id: int, limit: int = 10) -> list[dict]:
 def get_messages(chat_id: int, limit: int = 200) -> list[dict]:
     with get_conn() as conn:
         rows = conn.execute(
-            "SELECT role, content, mode, created_at FROM messages WHERE chat_id = ? ORDER BY id ASC LIMIT ?",
+            "SELECT id, role, content, mode, created_at FROM messages WHERE chat_id = ? ORDER BY id ASC LIMIT ?",
             (chat_id, limit),
         ).fetchall()
     return [dict(r) for r in rows]
@@ -181,25 +251,30 @@ def get_messages(chat_id: int, limit: int = 200) -> list[dict]:
 
 # --- задачи / напоминания ---
 
-def create_task(title: str, due_at: str | None, chat_id: int | None = None) -> int:
+def create_task(title: str, due_at: str | None, chat_id: int | None = None, source: str = "manual") -> int:
     with get_conn() as conn:
         cur = conn.execute(
-            "INSERT INTO tasks (chat_id, title, due_at) VALUES (?, ?, ?)",
-            (chat_id, title, due_at),
+            "INSERT INTO tasks (chat_id, title, due_at, source) VALUES (?, ?, ?, ?)",
+            (chat_id, title, due_at, source),
         )
         return cur.lastrowid
 
 
 def list_tasks(status: str | None = None) -> list[dict]:
     with get_conn() as conn:
+        query = """
+            SELECT t.*, c.first_name AS contact_first_name, c.username AS contact_username
+            FROM tasks t
+            LEFT JOIN contacts c ON c.chat_id = t.chat_id
+        """
         if status:
+            query += " WHERE t.status = ?"
             rows = conn.execute(
-                "SELECT * FROM tasks WHERE status = ? ORDER BY due_at IS NULL, due_at ASC",
-                (status,),
+                query + " ORDER BY t.due_at IS NULL, t.due_at ASC", (status,)
             ).fetchall()
         else:
             rows = conn.execute(
-                "SELECT * FROM tasks ORDER BY status = 'done', due_at IS NULL, due_at ASC"
+                query + " ORDER BY t.status = 'done', t.due_at IS NULL, t.due_at ASC"
             ).fetchall()
     return [dict(r) for r in rows]
 
@@ -207,6 +282,11 @@ def list_tasks(status: str | None = None) -> list[dict]:
 def update_task_status(task_id: int, status: str) -> None:
     with get_conn() as conn:
         conn.execute("UPDATE tasks SET status = ? WHERE id = ?", (status, task_id))
+
+
+def delete_task(task_id: int) -> None:
+    with get_conn() as conn:
+        conn.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
 
 
 def get_due_tasks() -> list[dict]:
@@ -228,7 +308,7 @@ def mark_task_reminded(task_id: int) -> None:
 
 def get_stats() -> dict:
     with get_conn() as conn:
-        total_contacts = conn.execute("SELECT COUNT(*) c FROM contacts").fetchone()["c"]
+        total_contacts = conn.execute("SELECT COUNT(*) c FROM contacts WHERE archived = 0").fetchone()["c"]
         total_messages = conn.execute("SELECT COUNT(*) c FROM messages").fetchone()["c"]
         open_tasks = conn.execute("SELECT COUNT(*) c FROM tasks WHERE status='open'").fetchone()["c"]
         by_day = conn.execute(
@@ -236,6 +316,13 @@ def get_stats() -> dict:
             SELECT date(created_at) d, COUNT(*) c FROM messages
             WHERE created_at >= datetime('now', '-7 days')
             GROUP BY d ORDER BY d
+            """
+        ).fetchall()
+        by_hour = conn.execute(
+            """
+            SELECT CAST(strftime('%H', created_at) AS INTEGER) h, COUNT(*) c
+            FROM messages WHERE role = 'user'
+            GROUP BY h ORDER BY h
             """
         ).fetchall()
         top_contacts = conn.execute(
@@ -247,9 +334,14 @@ def get_stats() -> dict:
         ).fetchall()
         tag_distribution = conn.execute(
             """
-            SELECT t.name, COUNT(ct.chat_id) cnt FROM tags t
+            SELECT t.name, t.color, COUNT(ct.chat_id) cnt FROM tags t
             LEFT JOIN contact_tags ct ON ct.tag_id = t.id
             GROUP BY t.id
+            """
+        ).fetchall()
+        mode_distribution = conn.execute(
+            """
+            SELECT mode, COUNT(*) c FROM messages WHERE role = 'assistant' GROUP BY mode
             """
         ).fetchall()
     return {
@@ -257,6 +349,8 @@ def get_stats() -> dict:
         "total_messages": total_messages,
         "open_tasks": open_tasks,
         "messages_by_day": [dict(r) for r in by_day],
+        "messages_by_hour": [dict(r) for r in by_hour],
         "top_contacts": [dict(r) for r in top_contacts],
         "tag_distribution": [dict(r) for r in tag_distribution],
+        "mode_distribution": [dict(r) for r in mode_distribution],
     }
