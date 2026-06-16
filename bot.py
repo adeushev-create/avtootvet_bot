@@ -9,6 +9,7 @@ from aiogram.types import (
     CallbackQuery,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
+    MenuButtonWebApp,
     Message,
     WebAppInfo,
 )
@@ -93,7 +94,23 @@ def _contains_capture_phrase(text: str) -> bool:
     return any(phrase in lowered for phrase in settings.capture_phrases)
 
 
-async def _capture_task_from_chat(chat_id: int, text: str) -> None:
+def _contact_label(chat) -> str:
+    """Человеко-читаемая подпись контакта для уведомлений: имя (@юзернейм)."""
+    name = " ".join(filter(None, [chat.first_name, chat.last_name])).strip()
+    handle = f"@{chat.username}" if chat.username else ""
+    if name and handle:
+        return f"{name} ({handle})"
+    return name or handle or f"чат {chat.id}"
+
+
+def _truncate(text: str, limit: int = 300) -> str:
+    text = text.strip()
+    if len(text) <= limit:
+        return text
+    return text[:limit].rstrip() + "…"
+
+
+async def _capture_task_from_chat(chat_id: int, text: str, contact_label: str) -> None:
     extracted = extract_task(text)
     title = extracted["title"] if extracted else text.strip()
     due_at = extracted["due_at"] if extracted else None
@@ -104,7 +121,7 @@ async def _capture_task_from_chat(chat_id: int, text: str) -> None:
         try:
             await bot.send_message(
                 settings.owner_user_id,
-                f"📌 Записал в задачи (контакт {chat_id}): {title}{when}",
+                f"📌 Записал в задачи · {contact_label}\n{title}{when}",
             )
         except Exception:
             logger.exception("Не удалось отправить подтверждение о захваченной задаче")
@@ -125,6 +142,7 @@ async def on_business_message(message: Message) -> None:
     )
 
     is_owner_message = message.from_user is not None and message.from_user.id == settings.owner_user_id
+    contact_label = _contact_label(message.chat)
 
     if is_owner_message:
         # это ты сам вручную ответил человеку в обычном Telegram — секретарский режим
@@ -132,7 +150,7 @@ async def on_business_message(message: Message) -> None:
         if text:
             db.add_message(chat_id, "assistant", text, mode="manual")
             if _contains_capture_phrase(text):
-                await _capture_task_from_chat(chat_id, text)
+                await _capture_task_from_chat(chat_id, text, contact_label)
         return
 
     if chat_id in settings.excluded_chat_ids:
@@ -178,9 +196,14 @@ async def on_business_message(message: Message) -> None:
         keyboard = InlineKeyboardMarkup(
             inline_keyboard=[[InlineKeyboardButton(text="Отправить", callback_data=f"send:{draft_id}")]]
         )
+        notification = (
+            f"💬 {contact_label}\n"
+            f"Спросил(а): {_truncate(text)}\n\n"
+            f"Черновик ответа:\n{reply_text}"
+        )
         await bot.send_message(
             chat_id=settings.owner_user_id,
-            text=f"Черновик ответа для чата {chat_id}:\n\n{reply_text}",
+            text=notification,
             reply_markup=keyboard,
         )
     else:
@@ -225,7 +248,7 @@ async def on_send_draft(callback: CallbackQuery) -> None:
         try:
             await callback.message.edit_text(f"{draft['content']}\n\n✅ Отправлено")
         except Exception:
-            pass
+            logger.warning("Не удалось отредактировать сообщение-черновик после отправки", exc_info=True)
     await callback.answer("Отправлено")
 
 
@@ -235,9 +258,26 @@ async def run_api() -> None:
     await server.serve()
 
 
+async def setup_menu_button() -> None:
+    """Настраивает постоянную кнопку меню в чате с ботом, открывающую CRM —
+    надёжнее команды /crm, так как не зависит от того, в каком чате её набрали."""
+    if not (settings.webapp_url and settings.owner_user_id):
+        logger.warning("WEBAPP_URL или OWNER_USER_ID не заданы — кнопка меню CRM не настроена")
+        return
+    try:
+        await bot.set_chat_menu_button(
+            chat_id=settings.owner_user_id,
+            menu_button=MenuButtonWebApp(text="CRM", web_app=WebAppInfo(url=settings.webapp_url)),
+        )
+        logger.info("Кнопка меню CRM настроена для owner_user_id=%s", settings.owner_user_id)
+    except Exception:
+        logger.exception("Не удалось настроить кнопку меню CRM")
+
+
 async def main() -> None:
     db.init_db()
     await bot.delete_webhook(drop_pending_updates=True)
+    await setup_menu_button()
     await asyncio.gather(
         dp.start_polling(
             bot,
