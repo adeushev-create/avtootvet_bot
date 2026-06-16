@@ -54,5 +54,19 @@ class Settings:
     # чтобы данные не стирались при каждом передеплое.
     data_dir: str = os.getenv("DATA_DIR", ".")
 
+    # слово-триггер для быстрых заметок в чате с самим ботом: "запомни ..." — сохранит как задачу
+    trigger_word: str = os.getenv("TRIGGER_WORD", "запомни")
+
+    # фразы-триггеры для захвата задач прямо из переписки с реальными людьми:
+    # если твой СОБСТВЕННЫЙ ответ человеку содержит одну из этих фраз — бот сохранит задачу
+    capture_phrases: tuple[str, ...] = tuple(
+        p.strip().lower()
+        for p in os.getenv("CAPTURE_PHRASES", "запомни,не забыть,надо запомнить,надо не забыть").split(",")
+        if p.strip()
+    )
+
+    # автоматически находить задачи во входящих сообщениях (требует доп. вызов LLM на каждое сообщение)
+    auto_extract_tasks: bool = os.getenv("AUTO_EXTRACT_TASKS", "true").lower() == "true"
+
 
 settings = Settings()
