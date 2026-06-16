@@ -129,7 +129,12 @@ async def main() -> None:
     await asyncio.gather(
         dp.start_polling(
             bot,
-            allowed_updates=["business_connection", "business_message", "edited_business_message"],
+            allowed_updates=[
+                "message",
+                "business_connection",
+                "business_message",
+                "edited_business_message",
+            ],
         ),
         run_api(),
         reminder_loop(bot, settings.owner_user_id),
