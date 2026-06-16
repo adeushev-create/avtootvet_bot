@@ -2,77 +2,235 @@
 <html lang="ru">
 <head>
 <meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
 <title>Secretary CRM</title>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
 <style>
   :root {
     --bg: var(--tg-theme-bg-color, #ffffff);
-    --text: var(--tg-theme-text-color, #111111);
-    --hint: var(--tg-theme-hint-color, #888888);
-    --button: var(--tg-theme-button-color, #2678b6);
-    --button-text: var(--tg-theme-button-text-color, #ffffff);
-    --secondary-bg: var(--tg-theme-secondary-bg-color, #f4f4f5);
+    --secondary-bg: var(--tg-theme-secondary-bg-color, #f2efe9);
+    --text: var(--tg-theme-text-color, #1c1b29);
+    --hint: var(--tg-theme-hint-color, #8a8a8e);
+
+    --accent-1: #ff6b5e;
+    --accent-2: #ffb84d;
+    --accent-grad: linear-gradient(135deg, var(--accent-1), var(--accent-2));
+    --success: #2ee6a6;
+    --danger: #ff5c8a;
+    --ink: #1c1b29;
+
+    --radius-lg: 24px;
+    --radius-md: 16px;
+    --radius-sm: 10px;
+    --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+    --ease-smooth: cubic-bezier(0.22, 1, 0.36, 1);
   }
-  * { box-sizing: border-box; }
-  body { margin: 0; font-family: -apple-system, system-ui, sans-serif; background: var(--bg); color: var(--text); }
-  header {
-    padding: 12px 16px; display: flex; gap: 8px;
-    border-bottom: 1px solid var(--secondary-bg);
-    position: sticky; top: 0; background: var(--bg); z-index: 10;
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation-duration: 0.001ms !important; transition-duration: 0.001ms !important; }
   }
-  .tab-btn { flex: 1; padding: 8px; border: none; border-radius: 10px; background: var(--secondary-bg); color: var(--text); font-size: 14px; }
-  .tab-btn.active { background: var(--button); color: var(--button-text); }
-  main { padding: 12px 16px 80px; }
+
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    overscroll-behavior-y: none;
+  }
+  button, input, textarea { font-family: inherit; }
+
+  #app { display: flex; flex-direction: column; height: 100vh; position: relative; }
+
+  .topbar { padding: 18px 20px 10px; flex-shrink: 0; }
+  .topbar h1 { font-size: 28px; font-weight: 800; margin: 0; letter-spacing: -0.02em; }
+  .search-bar { margin-top: 12px; position: relative; }
+  .search-bar svg { position: absolute; left: 12px; top: 50%; transform: translateY(-50%); width: 16px; height: 16px; color: var(--hint); }
+  .search-bar input { width: 100%; padding: 10px 14px 10px 36px; border-radius: 14px; border: none; background: var(--secondary-bg); color: var(--text); font-size: 15px; }
+  .search-bar input::placeholder { color: var(--hint); }
+
+  .content { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; padding: 4px 16px 110px; }
   .tab-panel { display: none; }
-  .tab-panel.active { display: block; }
-  .card { background: var(--secondary-bg); border-radius: 12px; padding: 12px; margin-bottom: 10px; }
-  .card h3 { margin: 0 0 4px; font-size: 15px; }
-  .card .meta { color: var(--hint); font-size: 12px; }
-  .tag-chip { display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: 10px; color: #fff; margin: 4px 4px 0 0; }
-  .stat-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 14px; }
-  .stat-box { background: var(--secondary-bg); border-radius: 12px; padding: 10px; text-align: center; }
-  .stat-box .num { font-size: 20px; font-weight: 700; }
-  .stat-box .label { font-size: 11px; color: var(--hint); }
-  input, textarea { width: 100%; padding: 8px; border-radius: 8px; border: 1px solid var(--secondary-bg); background: var(--bg); color: var(--text); margin-bottom: 8px; font-size: 14px; }
-  button.primary { background: var(--button); color: var(--button-text); border: none; padding: 10px; border-radius: 8px; width: 100%; font-size: 14px; }
-  .task-row { display: flex; align-items: flex-start; gap: 8px; }
-  .task-row.done { opacity: 0.5; text-decoration: line-through; }
-  .empty { color: var(--hint); font-size: 13px; text-align: center; padding: 20px 0; }
-  h3.section-title { font-size: 14px; color: var(--hint); margin: 16px 0 8px; }
+  .tab-panel.active { display: block; animation: fadeSlideIn 0.32s var(--ease-smooth); }
+  @keyframes fadeSlideIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+
+  .section-title { font-size: 12px; font-weight: 700; color: var(--hint); margin: 22px 2px 10px; text-transform: uppercase; letter-spacing: 0.05em; }
+
+  .segmented { display: flex; background: var(--secondary-bg); border-radius: 13px; padding: 3px; gap: 2px; margin-bottom: 14px; }
+  .segmented button { flex: 1; border: none; background: transparent; padding: 8px 0; font-size: 13px; font-weight: 600; border-radius: 10px; color: var(--hint); transition: background 0.25s var(--ease-spring), color 0.25s; }
+  .segmented button.active { background: var(--bg); color: var(--text); box-shadow: 0 1px 4px rgba(0,0,0,0.12); }
+
+  .empty-state { text-align: center; padding: 64px 24px; color: var(--hint); font-size: 14px; line-height: 1.5; }
+  .empty-state svg { width: 36px; height: 36px; margin-bottom: 12px; opacity: 0.45; }
+
+  .skeleton { background: linear-gradient(90deg, var(--secondary-bg) 25%, rgba(150,150,150,0.18) 37%, var(--secondary-bg) 63%); background-size: 400% 100%; animation: shimmer 1.4s ease infinite; border-radius: var(--radius-md); height: 66px; margin-bottom: 10px; }
+  @keyframes shimmer { 0% { background-position: 100% 50%; } 100% { background-position: 0 50%; } }
+
+  /* swipe rows */
+  .swipe-wrap { position: relative; border-radius: var(--radius-md); overflow: hidden; margin-bottom: 10px; }
+  .swipe-action { position: absolute; top: 0; right: 0; bottom: 0; width: 88px; display: flex; align-items: center; justify-content: center; color: #fff; font-weight: 700; font-size: 13px; }
+  .swipe-action.danger { background: var(--danger); }
+  .swipe-content { position: relative; background: var(--secondary-bg); padding: 14px; touch-action: pan-y; will-change: transform; }
+
+  .avatar-sm { border-radius: 50%; flex-shrink: 0; display: flex; align-items: center; justify-content: center; color: #fff; font-weight: 700; }
+
+  .contact-row { display: flex; gap: 12px; align-items: center; }
+  .contact-row .meta { flex: 1; min-width: 0; }
+  .contact-row h3 { margin: 0; font-size: 16px; font-weight: 700; line-height: 1.25; }
+  .contact-row .sub { font-size: 13px; color: var(--hint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 1px; }
+  .tags-row { display: flex; gap: 4px; margin-top: 6px; flex-wrap: wrap; }
+  .tag-pill { font-size: 10px; padding: 3px 9px; border-radius: 8px; color: #fff; font-weight: 600; border: none; }
+
+  .task-row { display: flex; align-items: flex-start; gap: 12px; }
+  .task-check { width: 26px; height: 26px; border-radius: 50%; border: 2px solid var(--accent-1); flex-shrink: 0; display: flex; align-items: center; justify-content: center; transition: all 0.22s var(--ease-spring); cursor: pointer; margin-top: 1px; }
+  .task-check.done { background: var(--success); border-color: var(--success); }
+  .task-check svg { width: 13px; height: 13px; opacity: 0; transform: scale(0.5); transition: all 0.2s var(--ease-spring); color: #fff; }
+  .task-check.done svg { opacity: 1; transform: scale(1); }
+  .task-title { font-size: 15px; font-weight: 600; line-height: 1.3; }
+  .task-row.done .task-title { text-decoration: line-through; opacity: 0.5; }
+  .task-badge { font-size: 9px; padding: 2px 6px; border-radius: 6px; background: var(--accent-1); color: #fff; font-weight: 700; margin-left: 6px; vertical-align: middle; }
+
+  .stat-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 6px; }
+  .stat-box { background: var(--secondary-bg); border-radius: 16px; padding: 14px 6px; text-align: center; }
+  .stat-box .num { font-size: 22px; font-weight: 800; font-variant-numeric: tabular-nums; }
+  .stat-box .label { font-size: 11px; color: var(--hint); margin-top: 2px; }
+
+  /* bottom tab bar */
+  .tabbar { display: flex; flex-shrink: 0; padding: 6px 6px calc(6px + env(safe-area-inset-bottom)); background: var(--secondary-bg); backdrop-filter: blur(20px) saturate(180%); border-top: 1px solid rgba(140,140,140,0.18); }
+  .tab-btn { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 3px; background: none; border: none; padding: 8px 2px; color: var(--hint); font-size: 10.5px; font-weight: 600; transition: color 0.2s, transform 0.2s var(--ease-spring); }
+  .tab-btn svg { width: 23px; height: 23px; transition: transform 0.25s var(--ease-spring); }
+  .tab-btn.active { color: var(--accent-1); }
+  .tab-btn.active svg { transform: scale(1.1) translateY(-1px); }
+  .tab-btn:active { transform: scale(0.9); }
+
+  .fab { position: fixed; right: 20px; bottom: calc(86px + env(safe-area-inset-bottom)); width: 56px; height: 56px; border-radius: 50%; background: var(--accent-grad); color: #fff; border: none; box-shadow: 0 8px 22px rgba(255,107,94,0.45); display: none; align-items: center; justify-content: center; z-index: 30; transition: transform 0.2s var(--ease-spring); }
+  .fab:active { transform: scale(0.86); }
+  .fab svg { width: 24px; height: 24px; }
+
+  .sheet-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0); backdrop-filter: blur(0px); transition: background 0.3s, backdrop-filter 0.3s; pointer-events: none; z-index: 40; }
+  .sheet-backdrop.visible { background: rgba(0,0,0,0.4); backdrop-filter: blur(6px); pointer-events: auto; }
+
+  .sheet { position: fixed; left: 0; right: 0; bottom: 0; background: var(--bg); border-radius: 26px 26px 0 0; transform: translateY(100%); transition: transform 0.42s var(--ease-spring); z-index: 50; display: flex; flex-direction: column; box-shadow: 0 -10px 40px rgba(0,0,0,0.25); max-height: 90vh; }
+  .sheet.open { transform: translateY(0); }
+  #contact-sheet { height: 88vh; }
+  #form-sheet { height: auto; padding-bottom: env(safe-area-inset-bottom); }
+  .sheet-handle { width: 38px; height: 5px; border-radius: 3px; background: var(--hint); opacity: 0.4; margin: 10px auto 2px; flex-shrink: 0; }
+  .sheet-header { position: relative; padding: 6px 20px 14px; text-align: center; flex-shrink: 0; }
+  .sheet-close { position: absolute; top: 10px; right: 14px; width: 30px; height: 30px; border-radius: 50%; background: var(--secondary-bg); border: none; color: var(--hint); font-size: 14px; display: flex; align-items: center; justify-content: center; }
+  .sheet-avatar { width: 76px; height: 76px; border-radius: 50%; margin: 6px auto 12px; display: flex; align-items: center; justify-content: center; color: #fff; font-weight: 800; font-size: 27px; }
+  .sheet-body { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; padding: 0 18px 28px; }
+  #form-sheet-content { padding: 6px 20px 24px; }
+
+  .bubble-row { display: flex; margin: 6px 0; }
+  .bubble-row.out { justify-content: flex-end; }
+  .bubble { max-width: 78%; padding: 10px 14px; border-radius: 18px; font-size: 15px; line-height: 1.35; word-break: break-word; }
+  .bubble.in { background: var(--secondary-bg); border-bottom-left-radius: 6px; }
+  .bubble.out { background: var(--accent-grad); color: #fff; border-bottom-right-radius: 6px; }
+  .bubble .badge { display: block; font-size: 10px; margin-top: 4px; }
+  .bubble.out .badge { color: rgba(255,255,255,0.8); }
+  .bubble.in .badge { color: var(--hint); }
+  .send-draft-btn { display: block; margin-top: 8px; border: none; background: rgba(255,255,255,0.28); color: #fff; padding: 6px 14px; border-radius: 10px; font-size: 12px; font-weight: 700; }
+  .send-draft-btn:active { transform: scale(0.95); }
+  .send-draft-btn:disabled { opacity: 0.6; }
+
+  .form-input { width: 100%; padding: 12px 14px; border-radius: 14px; border: none; background: var(--secondary-bg); color: var(--text); margin-bottom: 10px; font-size: 15px; }
+  .form-input::placeholder { color: var(--hint); }
+  textarea.form-input { resize: vertical; min-height: 64px; }
+  .btn-primary { width: 100%; padding: 14px; border: none; border-radius: 14px; background: var(--accent-grad); color: #fff; font-weight: 700; font-size: 15px; transition: transform 0.15s var(--ease-spring); margin-top: 4px; }
+  .btn-primary:active { transform: scale(0.97); }
+  .btn-danger-ghost { width: 100%; padding: 12px; border: none; border-radius: 14px; background: rgba(255,92,138,0.12); color: var(--danger); font-weight: 700; font-size: 14px; margin-top: 16px; }
+  .btn-danger-ghost:active { transform: scale(0.97); }
+
+  .toast { position: fixed; left: 50%; bottom: calc(110px + env(safe-area-inset-bottom)); transform: translate(-50%, 16px); background: var(--ink); color: #fff; padding: 10px 18px; border-radius: 14px; font-size: 13px; font-weight: 600; opacity: 0; transition: all 0.3s var(--ease-spring); z-index: 60; pointer-events: none; max-width: 80%; text-align: center; }
+  .toast.show { opacity: 1; transform: translate(-50%, 0); }
+
+  .mode-bar-row { margin-bottom: 10px; }
+  .mode-bar-track { height: 8px; border-radius: 4px; background: var(--secondary-bg); overflow: hidden; margin-top: 4px; }
+  .mode-bar-fill { height: 100%; background: var(--accent-grad); border-radius: 4px; }
 </style>
 </head>
 <body>
 
-<header>
-  <button class="tab-btn active" data-tab="contacts">Контакты</button>
-  <button class="tab-btn" data-tab="tasks">Задачи</button>
-  <button class="tab-btn" data-tab="stats">Статистика</button>
-</header>
-
-<main>
-  <section id="tab-contacts" class="tab-panel active">
-    <div id="contacts-list"><div class="empty">Загрузка...</div></div>
-  </section>
-
-  <section id="tab-tasks" class="tab-panel">
-    <div class="card">
-      <input id="task-title" placeholder="Текст задачи" />
-      <input id="task-due" type="datetime-local" />
-      <button class="primary" onclick="createTask()">Добавить задачу</button>
+<div id="app">
+  <div class="topbar">
+    <h1 id="screen-title">Контакты</h1>
+    <div class="search-bar" id="contacts-search-wrap">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+      <input id="contacts-search" placeholder="Поиск контактов" />
     </div>
-    <div id="tasks-list"><div class="empty">Загрузка...</div></div>
-  </section>
+  </div>
 
-  <section id="tab-stats" class="tab-panel">
-    <div class="stat-grid" id="stat-grid"></div>
-    <h3 class="section-title">Сообщения за 7 дней</h3>
-    <canvas id="chart-by-day" height="160"></canvas>
-    <h3 class="section-title">Сегменты</h3>
-    <canvas id="chart-tags" height="160"></canvas>
-  </section>
-</main>
+  <main class="content">
+    <section class="tab-panel active" data-panel="contacts">
+      <div id="contacts-list"></div>
+    </section>
+
+    <section class="tab-panel" data-panel="tasks">
+      <div class="segmented" id="task-segmented">
+        <button data-filter="all" class="active">Все</button>
+        <button data-filter="open">Открытые</button>
+        <button data-filter="today">Сегодня</button>
+        <button data-filter="done">Готово</button>
+      </div>
+      <div id="tasks-list"></div>
+    </section>
+
+    <section class="tab-panel" data-panel="tags">
+      <div id="tags-list"></div>
+    </section>
+
+    <section class="tab-panel" data-panel="stats">
+      <div class="stat-grid" id="stat-grid"></div>
+      <div class="section-title">Сообщения за неделю</div>
+      <canvas id="chart-by-day" height="150"></canvas>
+      <div class="section-title">В какие часы тебе пишут</div>
+      <canvas id="chart-by-hour" height="120"></canvas>
+      <div class="section-title">Сегменты</div>
+      <canvas id="chart-tags" height="160"></canvas>
+      <div class="section-title">Как отвечал бот</div>
+      <div id="mode-stats"></div>
+    </section>
+  </main>
+
+  <button class="fab" id="fab-add" aria-label="Добавить">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+  </button>
+
+  <nav class="tabbar">
+    <button class="tab-btn active" data-tab="contacts">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+      Контакты
+    </button>
+    <button class="tab-btn" data-tab="tasks">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
+      Задачи
+    </button>
+    <button class="tab-btn" data-tab="tags">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.59 13.41 13.42 20.58a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><circle cx="7" cy="7" r="1.4" fill="currentColor" stroke="none"/></svg>
+      Теги
+    </button>
+    <button class="tab-btn" data-tab="stats">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="20" x2="12" y2="10"/><line x1="18" y1="20" x2="18" y2="4"/><line x1="6" y1="20" x2="6" y2="16"/></svg>
+      Статистика
+    </button>
+  </nav>
+
+  <div class="sheet-backdrop" id="backdrop"></div>
+
+  <div class="sheet" id="contact-sheet">
+    <div class="sheet-handle"></div>
+    <div class="sheet-header" id="sheet-header"></div>
+    <div class="sheet-body" id="sheet-body"></div>
+  </div>
+
+  <div class="sheet" id="form-sheet">
+    <div class="sheet-handle"></div>
+    <div id="form-sheet-content"></div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+</div>
 
 <script>
 const tg = window.Telegram?.WebApp;
@@ -81,6 +239,13 @@ tg?.expand();
 
 const API_BASE = window.location.origin;
 const initData = tg?.initData || "";
+
+function haptic(style) {
+  try { tg?.HapticFeedback?.impactOccurred(style || "light"); } catch (e) {}
+}
+function hapticSuccess() {
+  try { tg?.HapticFeedback?.notificationOccurred("success"); } catch (e) {}
+}
 
 async function api(path, options = {}) {
   const res = await fetch(API_BASE + path, {
@@ -91,116 +256,500 @@ async function api(path, options = {}) {
       ...(options.headers || {}),
     },
   });
-  if (!res.ok) throw new Error(`API ${path} -> ${res.status}`);
+  if (!res.ok) throw new Error(`${path} -> ${res.status}`);
+  if (res.status === 204) return null;
   return res.json();
 }
-
-document.querySelectorAll(".tab-btn").forEach((btn) => {
-  btn.addEventListener("click", () => {
-    document.querySelectorAll(".tab-btn").forEach((b) => b.classList.remove("active"));
-    document.querySelectorAll(".tab-panel").forEach((p) => p.classList.remove("active"));
-    btn.classList.add("active");
-    document.getElementById("tab-" + btn.dataset.tab).classList.add("active");
-  });
-});
 
 function escapeHtml(str) {
   return (str || "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 
-async function loadContacts() {
-  const el = document.getElementById("contacts-list");
-  try {
-    const contacts = await api("/api/contacts");
-    if (!contacts.length) {
-      el.innerHTML = '<div class="empty">Пока нет контактов</div>';
-      return;
+function showToast(text) {
+  const t = document.getElementById("toast");
+  t.textContent = text;
+  t.classList.add("show");
+  clearTimeout(t._timer);
+  t._timer = setTimeout(() => t.classList.remove("show"), 1800);
+}
+
+const AVATAR_GRADIENTS = [
+  ["#ff6b5e", "#ffb84d"], ["#6c5ce7", "#00c2ff"], ["#2ee6a6", "#1fa67a"],
+  ["#ff5c8a", "#ff8fb3"], ["#3db2ff", "#7b61ff"], ["#ffc93c", "#ff6b5e"],
+];
+function gradientFor(id) {
+  const idx = Math.abs(id || 0) % AVATAR_GRADIENTS.length;
+  return AVATAR_GRADIENTS[idx];
+}
+function initialsFor(c) {
+  const a = (c.first_name || c.contact_first_name || "")[0] || "";
+  const b = (c.last_name || "")[0] || "";
+  const u = (c.username || c.contact_username || "")[0] || "";
+  return ((a + b) || u || "?").toUpperCase();
+}
+function avatarHtml(id, c, size) {
+  size = size || 46;
+  const [c1, c2] = gradientFor(id);
+  return `<div class="avatar-sm" style="width:${size}px;height:${size}px;background:linear-gradient(135deg,${c1},${c2});font-size:${Math.round(size * 0.36)}px">${escapeHtml(initialsFor(c))}</div>`;
+}
+
+// --- свайп-жесты ---
+function enableSwipe(rowEl, contentEl, actionWidth, { onAction, onTap } = {}) {
+  let startX = 0, startY = 0, dx = 0, dragging = false, decided = false, horizontal = false;
+  contentEl.addEventListener("pointerdown", (e) => {
+    startX = e.clientX; startY = e.clientY; dx = 0; dragging = true; decided = false; horizontal = false;
+    contentEl.style.transition = "none";
+  });
+  contentEl.addEventListener("pointermove", (e) => {
+    if (!dragging) return;
+    const ddx = e.clientX - startX, ddy = e.clientY - startY;
+    if (!decided) {
+      if (Math.abs(ddx) > 6 || Math.abs(ddy) > 6) { decided = true; horizontal = Math.abs(ddx) > Math.abs(ddy); }
+      else return;
     }
-    el.innerHTML = contacts
-      .map(
-        (c) => `
-      <div class="card">
-        <h3>${escapeHtml(c.first_name || "")} ${escapeHtml(c.last_name || "")} ${c.username ? "@" + escapeHtml(c.username) : ""}</h3>
-        <div class="meta">${c.message_count} сообщ. · последнее: ${escapeHtml(c.last_message || "")}</div>
-        <div>${(c.tags || []).map((t) => `<span class="tag-chip" style="background:${t.color}">${escapeHtml(t.name)}</span>`).join("")}</div>
-      </div>
-    `
-      )
-      .join("");
-  } catch (e) {
-    el.innerHTML = '<div class="empty">Ошибка загрузки. Открой через кнопку бота, не напрямую в браузере.</div>';
+    if (!horizontal) return;
+    dx = Math.min(0, Math.max(ddx, -actionWidth * 1.3));
+    contentEl.style.transform = `translateX(${dx}px)`;
+  });
+  const end = () => {
+    if (!dragging) return;
+    dragging = false;
+    contentEl.style.transition = "transform .25s cubic-bezier(0.34,1.56,0.64,1)";
+    if (horizontal && dx < -actionWidth * 0.6) {
+      contentEl.style.transform = `translateX(${-actionWidth}px)`;
+      haptic("medium");
+    } else {
+      contentEl.style.transform = "translateX(0)";
+      if (!decided && onTap) onTap();
+    }
+  };
+  contentEl.addEventListener("pointerup", end);
+  contentEl.addEventListener("pointercancel", end);
+  const actionEl = rowEl.querySelector(".swipe-action");
+  if (actionEl) {
+    actionEl.addEventListener("click", () => {
+      onAction?.();
+      contentEl.style.transform = "translateX(0)";
+    });
   }
 }
 
-async function loadTasks() {
-  const el = document.getElementById("tasks-list");
+// --- табы ---
+const TAB_TITLES = { contacts: "Контакты", tasks: "Задачи", tags: "Теги", stats: "Статистика" };
+document.querySelectorAll(".tab-btn").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    haptic("light");
+    document.querySelectorAll(".tab-btn").forEach((b) => b.classList.remove("active"));
+    document.querySelectorAll(".tab-panel").forEach((p) => p.classList.remove("active"));
+    btn.classList.add("active");
+    document.querySelector(`.tab-panel[data-panel="${btn.dataset.tab}"]`).classList.add("active");
+    document.getElementById("screen-title").textContent = TAB_TITLES[btn.dataset.tab];
+    document.getElementById("contacts-search-wrap").style.display = btn.dataset.tab === "contacts" ? "" : "none";
+    document.getElementById("fab-add").style.display = (btn.dataset.tab === "tasks" || btn.dataset.tab === "tags") ? "flex" : "none";
+  });
+});
+
+// --- модалки (sheets) ---
+function closeSheet() {
+  document.getElementById("backdrop").classList.remove("visible");
+  document.getElementById("contact-sheet").classList.remove("open");
+  document.getElementById("form-sheet").classList.remove("open");
+}
+document.getElementById("backdrop").addEventListener("click", closeSheet);
+
+function openFormSheet(html) {
+  document.getElementById("form-sheet-content").innerHTML = html;
+  document.getElementById("backdrop").classList.add("visible");
+  document.getElementById("form-sheet").classList.add("open");
+}
+
+// --- КОНТАКТЫ ---
+let allContacts = [];
+async function loadContacts() {
+  const list = document.getElementById("contacts-list");
+  list.innerHTML = Array(4).fill('<div class="skeleton"></div>').join("");
   try {
-    const tasks = await api("/api/tasks");
-    if (!tasks.length) {
-      el.innerHTML = '<div class="empty">Задач нет</div>';
-      return;
-    }
-    el.innerHTML = tasks
-      .map(
-        (t) => `
-      <div class="card task-row ${t.status === "done" ? "done" : ""}">
-        <input type="checkbox" ${t.status === "done" ? "checked" : ""} onchange="toggleTask(${t.id}, this.checked)" />
-        <div>
-          <div>${escapeHtml(t.title)}</div>
-          <div class="meta">${t.due_at ? new Date(t.due_at).toLocaleString() : "без срока"}</div>
+    allContacts = await api("/api/contacts");
+    renderContacts();
+  } catch (e) {
+    list.innerHTML = '<div class="empty-state">Не получилось загрузить.<br>Открой через кнопку бота, не напрямую в браузере.</div>';
+  }
+}
+function renderContacts() {
+  const list = document.getElementById("contacts-list");
+  const q = (document.getElementById("contacts-search").value || "").toLowerCase();
+  const filtered = allContacts.filter((c) => {
+    if (!q) return true;
+    const hay = `${c.first_name || ""} ${c.last_name || ""} ${c.username || ""}`.toLowerCase();
+    return hay.includes(q);
+  });
+  if (!filtered.length) {
+    list.innerHTML = '<div class="empty-state">Пока никого нет.<br>Как только тебе кто-то напишет — контакт появится здесь.</div>';
+    return;
+  }
+  list.innerHTML = filtered.map((c) => `
+    <div class="swipe-wrap" data-chat="${c.chat_id}">
+      <div class="swipe-action danger">Архив</div>
+      <div class="swipe-content contact-row">
+        ${avatarHtml(c.chat_id, c)}
+        <div class="meta">
+          <h3>${escapeHtml(c.first_name || "")} ${escapeHtml(c.last_name || "")}</h3>
+          <div class="sub">${c.username ? "@" + escapeHtml(c.username) + " · " : ""}${escapeHtml(c.last_message || "пока тишина")}</div>
+          ${c.tags && c.tags.length ? `<div class="tags-row">${c.tags.map((t) => `<span class="tag-pill" style="background:${t.color}">${escapeHtml(t.name)}</span>`).join("")}</div>` : ""}
         </div>
       </div>
-    `
-      )
-      .join("");
+    </div>
+  `).join("");
+
+  list.querySelectorAll(".swipe-wrap").forEach((wrap) => {
+    const chatId = parseInt(wrap.dataset.chat, 10);
+    const content = wrap.querySelector(".swipe-content");
+    enableSwipe(wrap, content, 88, {
+      onAction: async () => {
+        await api(`/api/contacts/${chatId}/archive`, { method: "POST", body: JSON.stringify({ archived: true }) });
+        hapticSuccess();
+        showToast("Контакт архивирован");
+        allContacts = allContacts.filter((c) => c.chat_id !== chatId);
+        renderContacts();
+      },
+      onTap: () => openContactSheet(chatId),
+    });
+  });
+}
+document.getElementById("contacts-search").addEventListener("input", renderContacts);
+
+async function openContactSheet(chatId) {
+  document.getElementById("backdrop").classList.add("visible");
+  document.getElementById("contact-sheet").classList.add("open");
+  haptic("light");
+
+  const header = document.getElementById("sheet-header");
+  const body = document.getElementById("sheet-body");
+  header.innerHTML = '<button class="sheet-close" id="sheet-close">✕</button><div class="skeleton" style="height:76px;width:76px;border-radius:50%;margin:6px auto;"></div>';
+  body.innerHTML = '<div class="skeleton"></div><div class="skeleton"></div>';
+  document.getElementById("sheet-close").addEventListener("click", closeSheet);
+
+  let contact, messages, tags;
+  try {
+    [contact, messages, tags] = await Promise.all([
+      api(`/api/contacts/${chatId}`),
+      api(`/api/contacts/${chatId}/messages`),
+      api("/api/tags"),
+    ]);
   } catch (e) {
-    el.innerHTML = '<div class="empty">Ошибка загрузки</div>';
+    body.innerHTML = '<div class="empty-state">Не удалось загрузить контакт</div>';
+    return;
+  }
+
+  const [c1, c2] = gradientFor(chatId);
+  header.innerHTML = `
+    <button class="sheet-close" id="sheet-close">✕</button>
+    <div class="sheet-avatar" style="background:linear-gradient(135deg,${c1},${c2})">${escapeHtml(initialsFor(contact))}</div>
+    <div style="font-size:19px;font-weight:800;">${escapeHtml(contact.first_name || "")} ${escapeHtml(contact.last_name || "")}</div>
+    <div style="color:var(--hint);font-size:13px;">${contact.username ? "@" + escapeHtml(contact.username) : ""}</div>
+    <div class="tags-row" id="sheet-tags" style="justify-content:center;margin-top:10px;"></div>
+  `;
+  document.getElementById("sheet-close").addEventListener("click", closeSheet);
+
+  const tagsWrap = document.getElementById("sheet-tags");
+  const activeIds = new Set((contact.tags || []).map((t) => t.id));
+  tagsWrap.innerHTML = tags.length
+    ? tags.map((t) => `<button class="tag-pill" data-tag="${t.id}" style="background:${activeIds.has(t.id) ? t.color : "var(--secondary-bg)"};color:${activeIds.has(t.id) ? "#fff" : "var(--text)"};">${escapeHtml(t.name)}</button>`).join("")
+    : '<span style="color:var(--hint);font-size:12px;">Тегов пока нет — создай во вкладке «Теги»</span>';
+  tagsWrap.querySelectorAll("[data-tag]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const id = parseInt(btn.dataset.tag, 10);
+      if (activeIds.has(id)) activeIds.delete(id); else activeIds.add(id);
+      haptic("light");
+      await api(`/api/contacts/${chatId}/tags`, { method: "POST", body: JSON.stringify({ tag_ids: [...activeIds] }) });
+      openContactSheet(chatId);
+    });
+  });
+
+  body.innerHTML = `
+    <textarea id="sheet-notes" class="form-input" placeholder="Заметка про контакт...">${escapeHtml(contact.notes || "")}</textarea>
+    <div id="thread"></div>
+    <button class="btn-danger-ghost" id="sheet-archive">Архивировать контакт</button>
+  `;
+  document.getElementById("sheet-notes").addEventListener("blur", async (e) => {
+    await api(`/api/contacts/${chatId}/notes`, { method: "POST", body: JSON.stringify({ notes: e.target.value }) });
+    showToast("Заметка сохранена");
+  });
+  document.getElementById("sheet-archive").addEventListener("click", async () => {
+    await api(`/api/contacts/${chatId}/archive`, { method: "POST", body: JSON.stringify({ archived: true }) });
+    hapticSuccess();
+    closeSheet();
+    showToast("Контакт архивирован");
+    loadContacts();
+  });
+
+  const thread = document.getElementById("thread");
+  if (!messages.length) {
+    thread.innerHTML = '<div class="empty-state">Переписки пока нет</div>';
+  } else {
+    thread.innerHTML = messages.map((m) => `
+      <div class="bubble-row ${m.role === "assistant" ? "out" : "in"}">
+        <div class="bubble ${m.role === "assistant" ? "out" : "in"}">
+          ${escapeHtml(m.content)}
+          ${m.role === "assistant" ? `<span class="badge">${m.mode === "draft" ? "черновик" : m.mode === "manual" ? "ответил сам" : "отправлено"} · ${new Date(m.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>` : ""}
+          ${m.mode === "draft" ? `<button class="send-draft-btn" data-msg="${m.id}">Отправить</button>` : ""}
+        </div>
+      </div>
+    `).join("");
+    thread.querySelectorAll(".send-draft-btn").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        btn.disabled = true;
+        btn.textContent = "Отправляю...";
+        try {
+          await api(`/api/messages/${btn.dataset.msg}/send`, { method: "POST" });
+          hapticSuccess();
+          showToast("Сообщение отправлено");
+          openContactSheet(chatId);
+        } catch (e) {
+          btn.disabled = false;
+          btn.textContent = "Отправить";
+          showToast("Не получилось отправить");
+        }
+      });
+    });
+    thread.scrollTop = thread.scrollHeight;
   }
 }
 
-async function toggleTask(id, checked) {
-  await api(`/api/tasks/${id}`, { method: "PATCH", body: JSON.stringify({ status: checked ? "done" : "open" }) });
-  loadTasks();
+// --- ЗАДАЧИ ---
+let allTasks = [];
+let taskFilter = "all";
+async function loadTasks() {
+  const list = document.getElementById("tasks-list");
+  list.innerHTML = Array(3).fill('<div class="skeleton"></div>').join("");
+  try {
+    allTasks = await api("/api/tasks");
+    renderTasks();
+  } catch (e) {
+    list.innerHTML = '<div class="empty-state">Ошибка загрузки</div>';
+  }
 }
+function renderTasks() {
+  const list = document.getElementById("tasks-list");
+  const now = new Date();
+  const todayStr = now.toISOString().slice(0, 10);
+  let filtered = allTasks;
+  if (taskFilter === "open") filtered = allTasks.filter((t) => t.status === "open");
+  if (taskFilter === "done") filtered = allTasks.filter((t) => t.status === "done");
+  if (taskFilter === "today") filtered = allTasks.filter((t) => t.due_at && t.due_at.slice(0, 10) === todayStr);
 
-async function createTask() {
-  const title = document.getElementById("task-title").value.trim();
-  const due = document.getElementById("task-due").value;
-  if (!title) return;
-  await api("/api/tasks", {
-    method: "POST",
-    body: JSON.stringify({ title, due_at: due ? new Date(due).toISOString() : null }),
+  if (!filtered.length) {
+    list.innerHTML = '<div class="empty-state">Тут пока пусто.<br>Нажми «+» или напиши боту «запомни ...»</div>';
+    return;
+  }
+
+  list.innerHTML = filtered.map((t) => {
+    const overdue = t.status === "open" && t.due_at && new Date(t.due_at) < now;
+    const who = t.contact_first_name ? ` · ${escapeHtml(t.contact_first_name)}` : "";
+    const badge = t.source === "auto" ? '<span class="task-badge">авто</span>' : t.source === "capture" ? '<span class="task-badge" style="background:var(--accent-2)">заметка</span>' : "";
+    return `
+    <div class="swipe-wrap" data-task="${t.id}">
+      <div class="swipe-action danger">Удалить</div>
+      <div class="swipe-content task-row ${t.status === "done" ? "done" : ""}">
+        <div class="task-check ${t.status === "done" ? "done" : ""}" data-toggle="${t.id}">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+        </div>
+        <div style="flex:1;">
+          <div class="task-title">${escapeHtml(t.title)} ${badge}</div>
+          <div class="sub" style="${overdue ? "color:var(--danger);font-weight:700;" : ""}">${t.due_at ? new Date(t.due_at).toLocaleString() : "без срока"}${who}</div>
+        </div>
+      </div>
+    </div>`;
+  }).join("");
+
+  list.querySelectorAll(".swipe-wrap").forEach((wrap) => {
+    const id = parseInt(wrap.dataset.task, 10);
+    const content = wrap.querySelector(".swipe-content");
+    enableSwipe(wrap, content, 88, {
+      onAction: async () => {
+        await api(`/api/tasks/${id}`, { method: "DELETE" });
+        hapticSuccess();
+        showToast("Задача удалена");
+        allTasks = allTasks.filter((t) => t.id !== id);
+        renderTasks();
+      },
+    });
   });
-  document.getElementById("task-title").value = "";
-  document.getElementById("task-due").value = "";
-  loadTasks();
+  list.querySelectorAll("[data-toggle]").forEach((el) => {
+    el.addEventListener("click", async () => {
+      const id = parseInt(el.dataset.toggle, 10);
+      const task = allTasks.find((t) => t.id === id);
+      const newStatus = task.status === "done" ? "open" : "done";
+      task.status = newStatus;
+      hapticSuccess();
+      renderTasks();
+      await api(`/api/tasks/${id}`, { method: "PATCH", body: JSON.stringify({ status: newStatus }) });
+    });
+  });
+}
+document.querySelectorAll("#task-segmented button").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    document.querySelectorAll("#task-segmented button").forEach((b) => b.classList.remove("active"));
+    btn.classList.add("active");
+    taskFilter = btn.dataset.filter;
+    haptic("light");
+    renderTasks();
+  });
+});
+
+function openTaskForm() {
+  openFormSheet(`
+    <h3 style="margin:14px 0 12px;">Новая задача</h3>
+    <input id="new-task-title" class="form-input" placeholder="Что нужно сделать" />
+    <input id="new-task-due" type="datetime-local" class="form-input" />
+    <button class="btn-primary" id="save-task">Добавить</button>
+  `);
+  document.getElementById("save-task").addEventListener("click", async () => {
+    const title = document.getElementById("new-task-title").value.trim();
+    const due = document.getElementById("new-task-due").value;
+    if (!title) return;
+    await api("/api/tasks", { method: "POST", body: JSON.stringify({ title, due_at: due ? new Date(due).toISOString() : null }) });
+    hapticSuccess();
+    closeSheet();
+    showToast("Задача добавлена");
+    loadTasks();
+  });
 }
 
+// --- ТЕГИ ---
+let allTags = [];
+async function loadTags() {
+  const list = document.getElementById("tags-list");
+  list.innerHTML = Array(3).fill('<div class="skeleton"></div>').join("");
+  try {
+    allTags = await api("/api/tags");
+    renderTags();
+  } catch (e) {
+    list.innerHTML = '<div class="empty-state">Ошибка загрузки</div>';
+  }
+}
+function renderTags() {
+  const list = document.getElementById("tags-list");
+  if (!allTags.length) {
+    list.innerHTML = '<div class="empty-state">Тегов пока нет.<br>Нажми «+», чтобы создать первый сегмент</div>';
+    return;
+  }
+  list.innerHTML = allTags.map((t) => `
+    <div class="swipe-wrap" data-tag="${t.id}">
+      <div class="swipe-action danger">Удалить</div>
+      <div class="swipe-content" style="display:flex;align-items:center;gap:12px;">
+        <div style="width:14px;height:14px;border-radius:50%;background:${t.color};flex-shrink:0;"></div>
+        <div style="flex:1;">
+          <div style="font-weight:700;font-size:15px;">${escapeHtml(t.name)}</div>
+          <div class="sub">${t.contact_count} контакт(ов)</div>
+        </div>
+      </div>
+    </div>
+  `).join("");
+  list.querySelectorAll(".swipe-wrap").forEach((wrap) => {
+    const id = parseInt(wrap.dataset.tag, 10);
+    const content = wrap.querySelector(".swipe-content");
+    enableSwipe(wrap, content, 88, {
+      onAction: async () => {
+        await api(`/api/tags/${id}`, { method: "DELETE" });
+        hapticSuccess();
+        showToast("Тег удалён");
+        allTags = allTags.filter((t) => t.id !== id);
+        renderTags();
+        loadContacts();
+      },
+    });
+  });
+}
+
+function openTagForm() {
+  const colors = ["#ff6b5e", "#ffb84d", "#2ee6a6", "#ff5c8a", "#3db2ff", "#7b61ff", "#ffc93c"];
+  let chosen = colors[0];
+  openFormSheet(`
+    <h3 style="margin:14px 0 12px;">Новый тег</h3>
+    <input id="new-tag-name" class="form-input" placeholder="Название" />
+    <div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap;" id="color-picker"></div>
+    <button class="btn-primary" id="save-tag">Создать</button>
+  `);
+  const picker = document.getElementById("color-picker");
+  picker.innerHTML = colors.map((c, i) => `<button data-c="${c}" style="width:32px;height:32px;border-radius:50%;background:${c};border:3px solid ${i === 0 ? "var(--text)" : "transparent"};"></button>`).join("");
+  picker.querySelectorAll("button").forEach((b) => {
+    b.addEventListener("click", () => {
+      chosen = b.dataset.c;
+      picker.querySelectorAll("button").forEach((x) => (x.style.border = "3px solid transparent"));
+      b.style.border = "3px solid var(--text)";
+      haptic("light");
+    });
+  });
+  document.getElementById("save-tag").addEventListener("click", async () => {
+    const name = document.getElementById("new-tag-name").value.trim();
+    if (!name) return;
+    await api("/api/tags", { method: "POST", body: JSON.stringify({ name, color: chosen }) });
+    hapticSuccess();
+    closeSheet();
+    showToast("Тег создан");
+    loadTags();
+  });
+}
+
+document.getElementById("fab-add").addEventListener("click", () => {
+  haptic("light");
+  const activeTab = document.querySelector(".tab-btn.active").dataset.tab;
+  if (activeTab === "tasks") openTaskForm();
+  if (activeTab === "tags") openTagForm();
+});
+
+// --- СТАТИСТИКА ---
+let chartByDay, chartByHour, chartTags;
 async function loadStats() {
   try {
-    const stats = await api("/api/stats");
+    const s = await api("/api/stats");
     document.getElementById("stat-grid").innerHTML = `
-      <div class="stat-box"><div class="num">${stats.total_contacts}</div><div class="label">контактов</div></div>
-      <div class="stat-box"><div class="num">${stats.total_messages}</div><div class="label">сообщений</div></div>
-      <div class="stat-box"><div class="num">${stats.open_tasks}</div><div class="label">открытых задач</div></div>
+      <div class="stat-box"><div class="num">${s.total_contacts}</div><div class="label">контактов</div></div>
+      <div class="stat-box"><div class="num">${s.total_messages}</div><div class="label">сообщений</div></div>
+      <div class="stat-box"><div class="num">${s.open_tasks}</div><div class="label">задач</div></div>
     `;
 
-    new Chart(document.getElementById("chart-by-day"), {
+    const days = s.messages_by_day;
+    chartByDay?.destroy();
+    chartByDay = new Chart(document.getElementById("chart-by-day"), {
       type: "bar",
       data: {
-        labels: stats.messages_by_day.map((d) => d.d),
-        datasets: [{ label: "сообщений в день", data: stats.messages_by_day.map((d) => d.c), backgroundColor: "#2678b6" }],
+        labels: days.map((d) => new Date(d.d).toLocaleDateString([], { weekday: "short" })),
+        datasets: [{ data: days.map((d) => d.c), backgroundColor: "#ff6b5e", borderRadius: 8 }],
       },
-      options: { plugins: { legend: { display: false } } },
+      options: { plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true, grid: { display: false } }, x: { grid: { display: false } } } },
     });
 
-    new Chart(document.getElementById("chart-tags"), {
-      type: "doughnut",
-      data: {
-        labels: stats.tag_distribution.map((t) => t.name),
-        datasets: [{ data: stats.tag_distribution.map((t) => t.cnt) }],
-      },
+    const hourMap = {};
+    s.messages_by_hour.forEach((x) => (hourMap[x.h] = x.c));
+    const hours = Array.from({ length: 24 }, (_, h) => hourMap[h] || 0);
+    chartByHour?.destroy();
+    chartByHour = new Chart(document.getElementById("chart-by-hour"), {
+      type: "bar",
+      data: { labels: Array.from({ length: 24 }, (_, h) => h), datasets: [{ data: hours, backgroundColor: "#ffb84d", borderRadius: 5 }] },
+      options: { plugins: { legend: { display: false } }, scales: { y: { display: false }, x: { grid: { display: false }, ticks: { maxTicksLimit: 8 } } } },
     });
+
+    chartTags?.destroy();
+    if (s.tag_distribution.length) {
+      chartTags = new Chart(document.getElementById("chart-tags"), {
+        type: "doughnut",
+        data: { labels: s.tag_distribution.map((t) => t.name), datasets: [{ data: s.tag_distribution.map((t) => t.cnt), backgroundColor: s.tag_distribution.map((t) => t.color) }] },
+        options: { plugins: { legend: { position: "bottom" } } },
+      });
+    }
+
+    const modeNames = { auto: "Автоответ", draft: "Черновик", excluded: "Пропущено", manual: "Ответил сам" };
+    const totalModes = s.mode_distribution.reduce((a, m) => a + m.c, 0) || 1;
+    document.getElementById("mode-stats").innerHTML = s.mode_distribution.length
+      ? s.mode_distribution.map((m) => `
+        <div class="mode-bar-row">
+          <div style="display:flex;justify-content:space-between;font-size:13px;"><span>${modeNames[m.mode] || m.mode}</span><span>${m.c}</span></div>
+          <div class="mode-bar-track"><div class="mode-bar-fill" style="width:${(m.c / totalModes) * 100}%"></div></div>
+        </div>
+      `).join("")
+      : '<div class="empty-state">Пока нет данных</div>';
   } catch (e) {
     console.error(e);
   }
@@ -208,6 +757,7 @@ async function loadStats() {
 
 loadContacts();
 loadTasks();
+loadTags();
 loadStats();
 </script>
 </body>
