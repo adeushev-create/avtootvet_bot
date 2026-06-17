@@ -22,6 +22,9 @@ DEFAULT_TAG_PROFILE_MAP = {
     "стартапы": "startup",
     "партнеры": "startup",
     "сбер500": "startup",
+    "друзья": "friends",
+    "кореша": "friends",
+    "бро": "friends",
 }
 
 
