@@ -89,6 +89,19 @@ async def on_business_connection(connection: BusinessConnection) -> None:
     logger.info("Business connection %s: enabled=%s", connection.id, connection.is_enabled)
 
 
+def _resolve_style_profile(chat_id: int) -> str:
+    """Смотрит теги контакта в CRM и сопоставляет с картой TAG_PROFILE_MAP.
+    Если совпадений нет (или контакта вообще нет) — обычный профиль (default)."""
+    contact = db.get_contact(chat_id)
+    if not contact:
+        return "default"
+    for tag in contact.get("tags", []):
+        tag_name = tag["name"].strip().lower()
+        if tag_name in settings.tag_profile_map:
+            return settings.tag_profile_map[tag_name]
+    return "default"
+
+
 def _contains_capture_phrase(text: str) -> bool:
     lowered = text.lower()
     return any(phrase in lowered for phrase in settings.capture_phrases)
@@ -163,8 +176,9 @@ async def on_business_message(message: Message) -> None:
         return
 
     history = db.get_history(chat_id, limit=10)
-    style_description = load_style_description()
-    examples = load_style_examples()
+    profile = _resolve_style_profile(chat_id)
+    style_description = load_style_description(profile)
+    examples = load_style_examples(profile)
     system_prompt = build_system_prompt(settings.your_name, style_description, examples)
 
     try:
