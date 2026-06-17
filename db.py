@@ -89,6 +89,7 @@ def init_db() -> None:
         _ensure_column(conn, "contacts", "archived", "archived INTEGER DEFAULT 0")
         _ensure_column(conn, "tasks", "source", "source TEXT DEFAULT 'manual'")
         _ensure_column(conn, "messages", "business_connection_id", "business_connection_id TEXT")
+        _ensure_column(conn, "contacts", "photo_file_id", "photo_file_id TEXT")
 
 
 # --- контакты ---
