@@ -67,7 +67,7 @@ def generate_reply(system_prompt: str, history: list[dict], incoming_text: str) 
     сообщениями переписки в этом чате (assistant = твои прошлые ответы).
     """
     messages = history + [{"role": "user", "content": incoming_text}]
-    return _dispatch(system_prompt, messages, max_tokens=400, temperature=0.8)
+    return _dispatch(system_prompt, messages, max_tokens=400, temperature=settings.reply_temperature)
 
 
 _EXTRACT_SYSTEM_PROMPT = """Ты анализируешь одно сообщение и решаешь, стоит ли превратить его в задачу/напоминание.

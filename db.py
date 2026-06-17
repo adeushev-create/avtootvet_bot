@@ -91,6 +91,9 @@ def init_db() -> None:
         _ensure_column(conn, "messages", "business_connection_id", "business_connection_id TEXT")
         _ensure_column(conn, "contacts", "photo_file_id", "photo_file_id TEXT")
 
+        # одноразовая миграция: раньше тег создавался под именем "жена", теперь — "семья"
+        conn.execute("UPDATE tags SET name = 'семья' WHERE name = 'жена'")
+
         # отдельная таблица — что из стартовых тегов уже было создано (даже если потом удалили).
         # Нужна, чтобы можно было безопасно добавлять новые теги по умолчанию в будущих версиях,
         # не воскрешая то, что ты сам удалил, и не пропуская то, что появилось позже.
@@ -101,7 +104,7 @@ def init_db() -> None:
             )
             """
         )
-        for name, color in (("работа", "#3db2ff"), ("жена", "#ff5c8a"), ("стартап", "#7b61ff"), ("друзья", "#ff6b5e")):
+        for name, color in (("работа", "#3db2ff"), ("семья", "#ff5c8a"), ("стартап", "#7b61ff"), ("друзья", "#ff6b5e")):
             already_seeded = conn.execute("SELECT 1 FROM seeded_tags WHERE name = ?", (name,)).fetchone()
             if already_seeded:
                 continue

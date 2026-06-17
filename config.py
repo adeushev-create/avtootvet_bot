@@ -103,6 +103,13 @@ class Settings:
     # автоматически находить задачи во входящих сообщениях (требует доп. вызов LLM на каждое сообщение)
     auto_extract_tasks: bool = os.getenv("AUTO_EXTRACT_TASKS", "true").lower() == "true"
 
+    # сколько секунд ждать после сообщения собеседника перед генерацией ответа — если за это
+    # время прилетят ещё сообщения, бот ответит на всю пачку сразу одним связным ответом
+    message_debounce_seconds: float = float(os.getenv("MESSAGE_DEBOUNCE_SECONDS", "2.5"))
+
+    # температура генерации ответа (0 = предсказуемо, 1 = разнообразнее, но выше риск "съехать")
+    reply_temperature: float = float(os.getenv("REPLY_TEMPERATURE", "0.65"))
+
     # карта "тег в CRM -> профиль стиля". Можно добавлять сколько угодно профилей —
     # просто создай style_description_<профиль>.txt и style_examples_<профиль>.txt
     tag_profile_map: dict = field(default_factory=lambda: _parse_tag_profile_map(os.getenv("TAG_PROFILE_MAP", "")))

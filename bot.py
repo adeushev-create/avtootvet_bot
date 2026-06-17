@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import re
 
 import uvicorn
 from aiogram import Dispatcher, F
@@ -89,6 +90,33 @@ async def on_business_connection(connection: BusinessConnection) -> None:
     logger.info("Business connection %s: enabled=%s", connection.id, connection.is_enabled)
 
 
+_SWEAR_WORDS = ("бля", "хуй", "хуе", "пизд", "ебат", "ебал", "ебан", "сука", "нахуй", "ахуе", "охуен", "мудак", "пидор")
+_CJK_PATTERN = re.compile(r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af]")
+
+
+def _contains_swearing(text: str) -> bool:
+    lowered = text.lower()
+    return any(w in lowered for w in _SWEAR_WORDS)
+
+
+def _strip_unexpected_scripts(text: str) -> str:
+    """Иногда LLM выдаёт случайные иероглифы (известный глитч). Подчищаем на всякий случай,
+    даже если в промпте уже есть инструкция писать только кириллицей."""
+    cleaned = _CJK_PATTERN.sub("", text)
+    return re.sub(r"\s{2,}", " ", cleaned).strip()
+
+
+def _apply_swearing_rule(system_prompt: str, incoming_text: str) -> str:
+    """Мат — только взаимно: если собеседник сам матерился в своём сообщении, можно ответить
+    в тон (если профиль это вообще допускает). Если не матерился — в этом ответе без мата,
+    даже если обычно с этим человеком можно."""
+    if _contains_swearing(incoming_text):
+        addendum = "\n\nСобеседник в этом сообщении выругался — можешь ответить в тон, как обычно с этим человеком, если профиль это допускает."
+    else:
+        addendum = "\n\nСобеседник в этом сообщении не матерился. В ЭТОМ ответе обойдись без мата, даже если обычно с этим человеком ты можешь материться. Мат — только в ответ на мат."
+    return system_prompt + addendum
+
+
 def _resolve_style_profile(chat_id: int) -> str:
     """Смотрит теги контакта в CRM и сопоставляет с картой TAG_PROFILE_MAP.
     Если совпадений нет (или контакта вообще нет) — обычный профиль (default)."""
@@ -140,6 +168,86 @@ async def _capture_task_from_chat(chat_id: int, text: str, contact_label: str) -
             logger.exception("Не удалось отправить подтверждение о захваченной задаче")
 
 
+_pending_texts: dict[int, list[str]] = {}
+_pending_tasks: dict[int, asyncio.Task] = {}
+
+
+async def _flush_and_reply(chat_id: int, business_connection_id: str | None, contact_label: str) -> None:
+    """Срабатывает после паузы без новых сообщений от этого собеседника — отвечает сразу
+    на всю накопленную пачку одним связным ответом, а не на каждое сообщение отдельно."""
+    try:
+        await asyncio.sleep(settings.message_debounce_seconds)
+    except asyncio.CancelledError:
+        return
+
+    texts = _pending_texts.pop(chat_id, [])
+    _pending_tasks.pop(chat_id, None)
+    if not texts:
+        return
+
+    combined_text = "\n".join(texts)
+
+    history = db.get_history(chat_id, limit=10)
+    profile = _resolve_style_profile(chat_id)
+    style_description = load_style_description(profile)
+    examples = load_style_examples(profile)
+    system_prompt = build_system_prompt(settings.your_name, style_description, examples)
+    system_prompt = _apply_swearing_rule(system_prompt, combined_text)
+
+    try:
+        reply_text = generate_reply(system_prompt, history, combined_text)
+    except Exception:
+        logger.exception("Ошибка при обращении к LLM (%s)", settings.llm_provider)
+        reply_text = None
+
+    # логируем каждое сообщение из пачки отдельной строкой — так тред в CRM выглядит естественно
+    for t in texts:
+        db.add_message(chat_id, "user", t)
+
+    if reply_text is None:
+        return
+
+    reply_text = _strip_unexpected_scripts(reply_text)
+    reply_text = humanize(
+        reply_text,
+        typo_probability=settings.typo_probability,
+        casual_probability=settings.casual_probability,
+    )
+
+    if settings.auto_extract_tasks:
+        try:
+            extracted = extract_task(combined_text)
+            if extracted:
+                db.create_task(extracted["title"], extracted["due_at"], chat_id=chat_id, source="auto")
+        except Exception:
+            logger.exception("Ошибка при автоопределении задачи")
+
+    if settings.mode == "draft" and settings.owner_user_id:
+        draft_id = db.add_message(
+            chat_id, "assistant", reply_text, mode="draft", business_connection_id=business_connection_id
+        )
+        keyboard = InlineKeyboardMarkup(
+            inline_keyboard=[[InlineKeyboardButton(text="Отправить", callback_data=f"send:{draft_id}")]]
+        )
+        notification = (
+            f"💬 {contact_label}\n"
+            f"Спросил(а): {_truncate(combined_text)}\n\n"
+            f"Черновик ответа:\n{reply_text}"
+        )
+        await bot.send_message(
+            chat_id=settings.owner_user_id,
+            text=notification,
+            reply_markup=keyboard,
+        )
+    else:
+        db.add_message(chat_id, "assistant", reply_text, mode="auto")
+        await bot.send_message(
+            chat_id=chat_id,
+            text=reply_text,
+            business_connection_id=business_connection_id,
+        )
+
+
 @dp.business_message()
 async def on_business_message(message: Message) -> None:
     chat_id = message.chat.id
@@ -175,58 +283,14 @@ async def on_business_message(message: Message) -> None:
     if not text:
         return
 
-    history = db.get_history(chat_id, limit=10)
-    profile = _resolve_style_profile(chat_id)
-    style_description = load_style_description(profile)
-    examples = load_style_examples(profile)
-    system_prompt = build_system_prompt(settings.your_name, style_description, examples)
-
-    try:
-        reply_text = generate_reply(system_prompt, history, text)
-    except Exception:
-        logger.exception("Ошибка при обращении к LLM (%s)", settings.llm_provider)
-        return
-
-    reply_text = humanize(
-        reply_text,
-        typo_probability=settings.typo_probability,
-        casual_probability=settings.casual_probability,
+    # копим короткую пачку: если за пару секунд прилетит ещё сообщение — ответим на всё сразу
+    _pending_texts.setdefault(chat_id, []).append(text)
+    existing_task = _pending_tasks.get(chat_id)
+    if existing_task and not existing_task.done():
+        existing_task.cancel()
+    _pending_tasks[chat_id] = asyncio.create_task(
+        _flush_and_reply(chat_id, message.business_connection_id, contact_label)
     )
-
-    db.add_message(chat_id, "user", text)
-
-    if settings.auto_extract_tasks:
-        try:
-            extracted = extract_task(text)
-            if extracted:
-                db.create_task(extracted["title"], extracted["due_at"], chat_id=chat_id, source="auto")
-        except Exception:
-            logger.exception("Ошибка при автоопределении задачи")
-
-    if settings.mode == "draft" and settings.owner_user_id:
-        draft_id = db.add_message(
-            chat_id, "assistant", reply_text, mode="draft", business_connection_id=message.business_connection_id
-        )
-        keyboard = InlineKeyboardMarkup(
-            inline_keyboard=[[InlineKeyboardButton(text="Отправить", callback_data=f"send:{draft_id}")]]
-        )
-        notification = (
-            f"💬 {contact_label}\n"
-            f"Спросил(а): {_truncate(text)}\n\n"
-            f"Черновик ответа:\n{reply_text}"
-        )
-        await bot.send_message(
-            chat_id=settings.owner_user_id,
-            text=notification,
-            reply_markup=keyboard,
-        )
-    else:
-        db.add_message(chat_id, "assistant", reply_text, mode="auto")
-        await bot.send_message(
-            chat_id=chat_id,
-            text=reply_text,
-            business_connection_id=message.business_connection_id,
-        )
 
 
 @dp.callback_query(F.data.startswith("send:"))
