@@ -118,16 +118,28 @@ def _apply_swearing_rule(system_prompt: str, incoming_text: str) -> str:
 
 
 def _resolve_style_profile(chat_id: int) -> str:
-    """Смотрит теги контакта в CRM и сопоставляет с картой TAG_PROFILE_MAP.
-    Если совпадений нет (или контакта вообще нет) — обычный профиль (default)."""
+    """Смотрит ВСЕ теги контакта в CRM, сопоставляет с картой TAG_PROFILE_MAP.
+    Если совпало несколько разных профилей сразу — побеждает тот, что выше в PROFILE_PRIORITY,
+    а не случайный (раньше тут была недетерминированная логика по порядку из базы)."""
     contact = db.get_contact(chat_id)
     if not contact:
         return "default"
+
+    matched_profiles = set()
     for tag in contact.get("tags", []):
         tag_name = tag["name"].strip().lower()
         if tag_name in settings.tag_profile_map:
-            return settings.tag_profile_map[tag_name]
-    return "default"
+            matched_profiles.add(settings.tag_profile_map[tag_name])
+
+    if not matched_profiles:
+        return "default"
+
+    for profile in settings.profile_priority:
+        if profile in matched_profiles:
+            return profile
+
+    # если совпавший профиль не упомянут в PROFILE_PRIORITY (например, кастомный) — берём любой
+    return next(iter(matched_profiles))
 
 
 def _contains_capture_phrase(text: str) -> bool:

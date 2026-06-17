@@ -114,5 +114,14 @@ class Settings:
     # просто создай style_description_<профиль>.txt и style_examples_<профиль>.txt
     tag_profile_map: dict = field(default_factory=lambda: _parse_tag_profile_map(os.getenv("TAG_PROFILE_MAP", "")))
 
+    # если на контакте несколько тегов с разными профилями — какой из них победит.
+    # Первый в списке — самый приоритетный. По умолчанию более формальные/безопасные
+    # профили побеждают над более раскрепощёнными.
+    profile_priority: tuple[str, ...] = tuple(
+        p.strip().lower()
+        for p in os.getenv("PROFILE_PRIORITY", "work,startup,wife,friends").split(",")
+        if p.strip()
+    )
+
 
 settings = Settings()
