@@ -117,11 +117,9 @@ def _apply_swearing_rule(system_prompt: str, incoming_text: str) -> str:
     return system_prompt + addendum
 
 
-def _resolve_style_profile(chat_id: int) -> str:
+def _resolve_style_profile(contact: dict | None) -> str:
     """Смотрит ВСЕ теги контакта в CRM, сопоставляет с картой TAG_PROFILE_MAP.
-    Если совпало несколько разных профилей сразу — побеждает тот, что выше в PROFILE_PRIORITY,
-    а не случайный (раньше тут была недетерминированная логика по порядку из базы)."""
-    contact = db.get_contact(chat_id)
+    Если совпало несколько разных профилей сразу — побеждает тот, что выше в PROFILE_PRIORITY."""
     if not contact:
         return "default"
 
@@ -138,8 +136,37 @@ def _resolve_style_profile(chat_id: int) -> str:
         if profile in matched_profiles:
             return profile
 
-    # если совпавший профиль не упомянут в PROFILE_PRIORITY (например, кастомный) — берём любой
     return next(iter(matched_profiles))
+
+
+def _build_contact_context(chat_id: int, contact: dict | None) -> str:
+    """Доп. контекст по конкретному собеседнику: твои реальные прошлые ответы именно ему
+    (а не абстрактные примеры из профиля) + честный прецедент по использованию его имени —
+    вместо того чтобы либо всегда копировать имя из примеров (баг), либо всегда его прятать."""
+    past_replies = db.get_assistant_messages(chat_id, limit=15)
+    if not past_replies:
+        return ""
+
+    first_name = ((contact or {}).get("first_name") or "").strip()
+    name_used_before = bool(first_name) and any(first_name.lower() in r.lower() for r in past_replies)
+
+    examples_block = "\n".join(f"- {r}" for r in past_replies[-10:])
+    if name_used_before:
+        name_note = (
+            f'Ты уже обращался к этому собеседнику по имени "{first_name}" раньше в этой переписке — '
+            f"можешь использовать его имя и сейчас, если уместно."
+        )
+    else:
+        name_note = (
+            "Ты раньше не обращался к этому собеседнику по имени в этой переписке (нет прецедента) — "
+            "не начинай делать это сейчас без явного повода, обращайся нейтрально."
+        )
+
+    return (
+        "\n\nДОПОЛНИТЕЛЬНО — твои реальные прошлые ответы именно этому собеседнику "
+        "(ориентир по тону и манере для конкретно этого разговора, в дополнение к общему профилю):\n"
+        f"{examples_block}\n\n{name_note}"
+    )
 
 
 def _contains_capture_phrase(text: str) -> bool:
@@ -200,10 +227,12 @@ async def _flush_and_reply(chat_id: int, business_connection_id: str | None, con
     combined_text = "\n".join(texts)
 
     history = db.get_history(chat_id, limit=10)
-    profile = _resolve_style_profile(chat_id)
+    contact = db.get_contact(chat_id)
+    profile = _resolve_style_profile(contact)
     style_description = load_style_description(profile)
     examples = load_style_examples(profile)
     system_prompt = build_system_prompt(settings.your_name, style_description, examples)
+    system_prompt += _build_contact_context(chat_id, contact)
     system_prompt = _apply_swearing_rule(system_prompt, combined_text)
 
     try:
