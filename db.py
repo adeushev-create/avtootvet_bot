@@ -91,12 +91,22 @@ def init_db() -> None:
         _ensure_column(conn, "messages", "business_connection_id", "business_connection_id TEXT")
         _ensure_column(conn, "contacts", "photo_file_id", "photo_file_id TEXT")
 
-        # автосоздание стартовых тегов — только если тегов вообще ещё нет (чтобы не
-        # восстанавливать их после того, как ты сам их удалил)
-        existing_tags = conn.execute("SELECT COUNT(*) c FROM tags").fetchone()["c"]
-        if existing_tags == 0:
-            for name, color in (("работа", "#3db2ff"), ("жена", "#ff5c8a"), ("стартап", "#7b61ff"), ("друзья", "#ff6b5e")):
-                conn.execute("INSERT OR IGNORE INTO tags (name, color) VALUES (?, ?)", (name, color))
+        # отдельная таблица — что из стартовых тегов уже было создано (даже если потом удалили).
+        # Нужна, чтобы можно было безопасно добавлять новые теги по умолчанию в будущих версиях,
+        # не воскрешая то, что ты сам удалил, и не пропуская то, что появилось позже.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS seeded_tags (
+                name TEXT PRIMARY KEY
+            )
+            """
+        )
+        for name, color in (("работа", "#3db2ff"), ("жена", "#ff5c8a"), ("стартап", "#7b61ff"), ("друзья", "#ff6b5e")):
+            already_seeded = conn.execute("SELECT 1 FROM seeded_tags WHERE name = ?", (name,)).fetchone()
+            if already_seeded:
+                continue
+            conn.execute("INSERT OR IGNORE INTO tags (name, color) VALUES (?, ?)", (name, color))
+            conn.execute("INSERT OR IGNORE INTO seeded_tags (name) VALUES (?)", (name,))
 
 
 # --- контакты ---
