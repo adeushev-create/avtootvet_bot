@@ -9,6 +9,38 @@ def _parse_excluded_ids(raw: str) -> frozenset[int]:
     return frozenset(int(x) for x in raw.split(",") if x.strip())
 
 
+DEFAULT_TAG_PROFILE_MAP = {
+    "работа": "work",
+    "коллеги": "work",
+    "клиенты": "work",
+    "бизнес": "work",
+    "жена": "wife",
+    "муж": "wife",
+    "семья": "wife",
+    "близкие": "wife",
+    "стартап": "startup",
+    "стартапы": "startup",
+    "партнеры": "startup",
+    "сбер500": "startup",
+}
+
+
+def _parse_tag_profile_map(raw: str) -> dict:
+    """Разбирает строку вида 'тег1:профиль1,тег2:профиль2' в словарь.
+    Если переменная не задана — используется набор тегов по умолчанию."""
+    if not raw.strip():
+        return dict(DEFAULT_TAG_PROFILE_MAP)
+    result: dict[str, str] = {}
+    for pair in raw.split(","):
+        if ":" not in pair:
+            continue
+        tag, profile = pair.split(":", 1)
+        tag, profile = tag.strip().lower(), profile.strip().lower()
+        if tag and profile:
+            result[tag] = profile
+    return result
+
+
 @dataclass
 class Settings:
     bot_token: str = os.getenv("BOT_TOKEN", "")
@@ -67,6 +99,10 @@ class Settings:
 
     # автоматически находить задачи во входящих сообщениях (требует доп. вызов LLM на каждое сообщение)
     auto_extract_tasks: bool = os.getenv("AUTO_EXTRACT_TASKS", "true").lower() == "true"
+
+    # карта "тег в CRM -> профиль стиля". Можно добавлять сколько угодно профилей —
+    # просто создай style_description_<профиль>.txt и style_examples_<профиль>.txt
+    tag_profile_map: dict = field(default_factory=lambda: _parse_tag_profile_map(os.getenv("TAG_PROFILE_MAP", "")))
 
 
 settings = Settings()
