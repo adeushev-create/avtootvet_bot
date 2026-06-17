@@ -261,6 +261,17 @@ def get_history(chat_id: int, limit: int = 10) -> list[dict]:
     return [{"role": r["role"], "content": r["content"]} for r in rows]
 
 
+def get_assistant_messages(chat_id: int, limit: int = 15) -> list[str]:
+    """Твои прошлые ответы именно этому контакту (любой mode) — для персонализации
+    под конкретного человека, а не только общий профиль стиля."""
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT content FROM messages WHERE chat_id = ? AND role = 'assistant' ORDER BY id DESC LIMIT ?",
+            (chat_id, limit),
+        ).fetchall()
+    return [r["content"] for r in rows][::-1]
+
+
 def get_messages(chat_id: int, limit: int = 200) -> list[dict]:
     with get_conn() as conn:
         rows = conn.execute(
