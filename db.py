@@ -91,6 +91,13 @@ def init_db() -> None:
         _ensure_column(conn, "messages", "business_connection_id", "business_connection_id TEXT")
         _ensure_column(conn, "contacts", "photo_file_id", "photo_file_id TEXT")
 
+        # автосоздание стартовых тегов — только если тегов вообще ещё нет (чтобы не
+        # восстанавливать их после того, как ты сам их удалил)
+        existing_tags = conn.execute("SELECT COUNT(*) c FROM tags").fetchone()["c"]
+        if existing_tags == 0:
+            for name, color in (("работа", "#3db2ff"), ("жена", "#ff5c8a"), ("стартап", "#7b61ff")):
+                conn.execute("INSERT OR IGNORE INTO tags (name, color) VALUES (?, ?)", (name, color))
+
 
 # --- контакты ---
 
