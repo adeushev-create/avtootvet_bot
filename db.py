@@ -251,10 +251,16 @@ def update_message_mode(message_id: int, mode: str) -> None:
         conn.execute("UPDATE messages SET mode = ? WHERE id = ?", (mode, message_id))
 
 
-def get_history(chat_id: int, limit: int = 10) -> list[dict]:
+def get_history(chat_id: int, limit: int = 30) -> list[dict]:
+    """Последние сообщения чата для контекста LLM.
+    Черновики, которые не были отправлены (mode='draft'), намеренно исключаем —
+    собеседник их не видел, и включать их в историю как будто ответ был дан — ошибка.
+    Включаем: входящие (user), отправленные ботом (auto), твои ручные ответы (manual)."""
     with get_conn() as conn:
         rows = conn.execute(
-            "SELECT role, content FROM messages WHERE chat_id = ? ORDER BY id DESC LIMIT ?",
+            """SELECT role, content FROM messages
+               WHERE chat_id = ? AND NOT (role = 'assistant' AND mode = 'draft')
+               ORDER BY id DESC LIMIT ?""",
             (chat_id, limit),
         ).fetchall()
     rows = list(rows)[::-1]
