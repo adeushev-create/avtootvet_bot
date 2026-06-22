@@ -342,7 +342,23 @@ def get_stats() -> dict:
     with get_conn() as conn:
         total_contacts = conn.execute("SELECT COUNT(*) c FROM contacts WHERE archived = 0").fetchone()["c"]
         total_messages = conn.execute("SELECT COUNT(*) c FROM messages").fetchone()["c"]
+
+        # задачи — все, а не только открытые
+        total_tasks = conn.execute("SELECT COUNT(*) c FROM tasks").fetchone()["c"]
         open_tasks = conn.execute("SELECT COUNT(*) c FROM tasks WHERE status='open'").fetchone()["c"]
+        done_tasks = conn.execute("SELECT COUNT(*) c FROM tasks WHERE status='done'").fetchone()["c"]
+        from datetime import datetime, timezone
+        now_iso = datetime.now(timezone.utc).isoformat()
+        overdue_tasks = conn.execute(
+            "SELECT COUNT(*) c FROM tasks WHERE status='open' AND due_at IS NOT NULL AND due_at < ?",
+            (now_iso,),
+        ).fetchone()["c"]
+
+        # разбивка по источнику
+        tasks_by_source = conn.execute(
+            "SELECT COALESCE(source, 'manual') source, COUNT(*) c FROM tasks GROUP BY source"
+        ).fetchall()
+
         by_day = conn.execute(
             """
             SELECT date(created_at) d, COUNT(*) c FROM messages
@@ -379,7 +395,11 @@ def get_stats() -> dict:
     return {
         "total_contacts": total_contacts,
         "total_messages": total_messages,
+        "total_tasks": total_tasks,
         "open_tasks": open_tasks,
+        "done_tasks": done_tasks,
+        "overdue_tasks": overdue_tasks,
+        "tasks_by_source": [dict(r) for r in tasks_by_source],
         "messages_by_day": [dict(r) for r in by_day],
         "messages_by_hour": [dict(r) for r in by_hour],
         "top_contacts": [dict(r) for r in top_contacts],
