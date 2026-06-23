@@ -482,18 +482,20 @@ async function openContactSheet(chatId) {
     await api(`/api/contacts/${chatId}/notes`, { method: "POST", body: JSON.stringify({ notes: e.target.value }) });
     showToast("Заметка сохранена");
   });
-  document.getElementById("refresh-summary").addEventListener("click", async (btn) => {
+  document.getElementById("refresh-summary").addEventListener("click", async () => {
     const el = document.getElementById("refresh-summary");
     el.disabled = true;
-    el.textContent = "Анализирую...";
+    el.textContent = "⏳ Анализирую переписку...";
     try {
       const result = await api(`/api/contacts/${chatId}/refresh-summary`, { method: "POST" });
       hapticSuccess();
       showToast("Профиль обновлён");
+      // небольшая задержка чтобы данные точно записались в базу
+      await new Promise(r => setTimeout(r, 600));
       openContactSheet(chatId);
     } catch (e) {
       el.disabled = false;
-      el.textContent = "🔄 Попробовать ещё раз";
+      el.textContent = contact.ai_summary ? "🔄 Обновить профиль" : "✨ Сгенерировать AI-профиль";
       showToast("Не удалось — мало данных или ошибка");
     }
   });
