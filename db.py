@@ -90,6 +90,34 @@ def init_db() -> None:
         _ensure_column(conn, "tasks", "source", "source TEXT DEFAULT 'manual'")
         _ensure_column(conn, "messages", "business_connection_id", "business_connection_id TEXT")
         _ensure_column(conn, "contacts", "photo_file_id", "photo_file_id TEXT")
+        _ensure_column(conn, "contacts", "ai_summary", "ai_summary TEXT")
+        _ensure_column(conn, "contacts", "tone", "tone TEXT")
+        _ensure_column(conn, "contacts", "tone_updated_at", "tone_updated_at TIMESTAMP")
+
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS ab_tests (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                chat_id INTEGER NOT NULL,
+                variant_a TEXT NOT NULL,
+                variant_b TEXT NOT NULL,
+                chosen TEXT,
+                business_connection_id TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS style_feedback (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                chat_id INTEGER,
+                chosen_text TEXT NOT NULL,
+                rejected_text TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
 
         # одноразовая миграция: раньше тег создавался под именем "жена", теперь — "семья"
         conn.execute("UPDATE tags SET name = 'семья' WHERE name = 'жена'")
@@ -343,6 +371,78 @@ def mark_task_reminded(task_id: int) -> None:
 
 
 # --- статистика ---
+
+# --- тон и профиль контакта ---
+
+def update_contact_tone(chat_id: int, tone: str) -> None:
+    now = datetime.now(timezone.utc).isoformat()
+    with get_conn() as conn:
+        conn.execute(
+            "UPDATE contacts SET tone=?, tone_updated_at=? WHERE chat_id=?",
+            (tone, now, chat_id),
+        )
+
+
+def update_contact_summary(chat_id: int, summary: str) -> None:
+    with get_conn() as conn:
+        conn.execute(
+            "UPDATE contacts SET ai_summary=? WHERE chat_id=?",
+            (summary, chat_id),
+        )
+
+
+def get_messages_for_analysis(chat_id: int, limit: int = 30) -> list[dict]:
+    """Последние сообщения для анализа тона и генерации профиля."""
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT role, content FROM messages WHERE chat_id=? ORDER BY id DESC LIMIT ?",
+            (chat_id, limit),
+        ).fetchall()
+    return [{"role": r["role"], "content": r["content"]} for r in rows][::-1]
+
+
+# --- A/B тесты ---
+
+def create_ab_test(chat_id: int, variant_a: str, variant_b: str, business_connection_id: str | None) -> int:
+    with get_conn() as conn:
+        cur = conn.execute(
+            "INSERT INTO ab_tests (chat_id, variant_a, variant_b, business_connection_id) VALUES (?,?,?,?)",
+            (chat_id, variant_a, variant_b, business_connection_id),
+        )
+        return cur.lastrowid
+
+
+def get_ab_test(ab_id: int) -> dict | None:
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM ab_tests WHERE id=?", (ab_id,)).fetchone()
+        return dict(row) if row else None
+
+
+def resolve_ab_test(ab_id: int, chosen: str) -> None:
+    """chosen = 'a' или 'b'"""
+    with get_conn() as conn:
+        test = conn.execute("SELECT * FROM ab_tests WHERE id=?", (ab_id,)).fetchone()
+        if not test:
+            return
+        conn.execute("UPDATE ab_tests SET chosen=? WHERE id=?", (chosen, ab_id))
+        if chosen == "a":
+            chosen_text, rejected_text = test["variant_a"], test["variant_b"]
+        else:
+            chosen_text, rejected_text = test["variant_b"], test["variant_a"]
+        conn.execute(
+            "INSERT INTO style_feedback (chat_id, chosen_text, rejected_text) VALUES (?,?,?)",
+            (test["chat_id"], chosen_text, rejected_text),
+        )
+
+
+def get_recent_style_feedback(limit: int = 20) -> list[dict]:
+    """Одобренные варианты ответов — используются для улучшения промпта."""
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT chosen_text FROM style_feedback ORDER BY id DESC LIMIT ?", (limit,)
+        ).fetchall()
+    return [r["chosen_text"] for r in rows][::-1]
+
 
 def get_stats() -> dict:
     with get_conn() as conn:
