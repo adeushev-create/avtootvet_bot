@@ -70,9 +70,15 @@ class Settings:
         default_factory=lambda: _parse_excluded_ids(os.getenv("EXCLUDED_CHAT_IDS", ""))
     )
 
-    # "draft" — присылать черновик владельцу на проверку перед отправкой (рекомендуется)
-    # "auto"  — отправлять собеседнику сразу
-    mode: str = os.getenv("REPLY_MODE", "draft")
+    # "draft" — присылать черновик владельцу на проверку перед отправкой (по умолчанию и единственный безопасный режим)
+    # "auto"  — отправлять собеседнику сразу, ТОЛЬКО если дополнительно задан AUTO_SEND_ENABLED=true
+    # Без AUTO_SEND_ENABLED=true бот никогда не отправит ответ без твоего подтверждения.
+    mode: str = (
+        "auto"
+        if os.getenv("REPLY_MODE", "draft").lower() == "auto"
+        and os.getenv("AUTO_SEND_ENABLED", "false").lower() == "true"
+        else "draft"
+    )
 
     # твой личный Telegram user_id (узнать через @userinfobot)
     owner_user_id: int = int(os.getenv("OWNER_USER_ID", "0"))
