@@ -110,6 +110,12 @@ class Settings:
     # температура генерации ответа (0 = предсказуемо, 1 = разнообразнее, но выше риск "съехать")
     reply_temperature: float = float(os.getenv("REPLY_TEMPERATURE", "0.65"))
 
+    # A/B тест стиля: если true — генерирует два варианта черновика, ты выбираешь лучший
+    ab_test_mode: bool = os.getenv("AB_TEST_MODE", "false").lower() == "true"
+
+    # сколько сообщений должно накопиться в чате, чтобы запустить анализ тона и генерацию профиля
+    tone_update_interval: int = int(os.getenv("TONE_UPDATE_INTERVAL", "5"))
+
     # карта "тег в CRM -> профиль стиля". Можно добавлять сколько угодно профилей —
     # просто создай style_description_<профиль>.txt и style_examples_<профиль>.txt
     tag_profile_map: dict = field(default_factory=lambda: _parse_tag_profile_map(os.getenv("TAG_PROFILE_MAP", "")))
