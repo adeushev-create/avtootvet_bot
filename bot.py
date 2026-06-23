@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import os
 import random
 import re
 from datetime import datetime, timedelta, timezone
@@ -685,6 +686,8 @@ async def setup_menu_button() -> None:
 
 async def main() -> None:
     db.init_db()
+    logger.info("=== REPLY_MODE: %s (AUTO_SEND_ENABLED=%s) ===",
+                settings.mode, os.getenv("AUTO_SEND_ENABLED", "false"))
     await bot.delete_webhook(drop_pending_updates=True)
     await setup_menu_button()
     await asyncio.gather(
