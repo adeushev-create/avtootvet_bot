@@ -112,12 +112,12 @@
   @keyframes shimmer { 0% { background-position: 100% 50%; } 100% { background-position: 0 50%; } }
 
   /* swipe rows */
-  .swipe-wrap { position: relative; border-radius: var(--radius-md); overflow: hidden; margin-bottom: 10px; }
-  .swipe-action { position: absolute; top: 0; right: 0; bottom: 0; width: 88px; display: flex; align-items: center; justify-content: center; color: #fff; font-weight: 700; font-size: 13px; }
+  .swipe-wrap { position: relative; border-radius: var(--radius-md); overflow: hidden; margin-bottom: 10px; isolation: isolate; }
+  .swipe-action { position: absolute; top: 0; right: 0; bottom: 0; width: 88px; display: flex; align-items: center; justify-content: center; color: #fff; font-weight: 700; font-size: 13px; z-index: 0; }
   .swipe-action.danger { background: linear-gradient(135deg, #ff5c7a, #ff2d6f); }
   .swipe-content {
     position: relative; background: #13121f; border: 1px solid var(--border); padding: 14px;
-    touch-action: pan-y; will-change: transform; transition: background 0.2s;
+    touch-action: pan-y; will-change: transform; transition: background 0.2s; z-index: 1;
   }
   .swipe-content:active { background: #1a1930; }
 
