@@ -77,6 +77,27 @@ async def show_my_id(message: Message) -> None:
     )
 
 
+@dp.message(Command("abon"))
+async def cmd_abon(message: Message) -> None:
+    if message.from_user is None or message.from_user.id != settings.owner_user_id:
+        return
+    settings.ab_test_mode = True
+    await message.answer(
+        "🅰🅱 A/B тест включён.\n\n"
+        "Теперь на каждое входящее сообщение буду присылать два варианта ответа с кнопками «Отправить А» и «Отправить Б». "
+        "Тот, что выберешь — уйдёт собеседнику и запомнится как образец для следующих ответов.\n\n"
+        "Выключить: /aboff"
+    )
+
+
+@dp.message(Command("aboff"))
+async def cmd_aboff(message: Message) -> None:
+    if message.from_user is None or message.from_user.id != settings.owner_user_id:
+        return
+    settings.ab_test_mode = False
+    await message.answer("A/B тест выключен, вернулся в обычный режим с одним черновиком.")
+
+
 @dp.message(Command("busy"))
 async def cmd_busy(message: Message) -> None:
     global _busy_until, _busy_reason
