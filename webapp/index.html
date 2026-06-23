@@ -395,7 +395,7 @@ function renderContacts() {
       <div class="swipe-content contact-row">
         ${avatarHtml(c.chat_id, c)}
         <div class="meta">
-          <h3>${escapeHtml(c.first_name || "")} ${escapeHtml(c.last_name || "")}</h3>
+          <h3>${escapeHtml(c.first_name || "")} ${escapeHtml(c.last_name || "")} ${c.tone ? `<span style="font-size:12px;font-weight:400;">${c.tone.split(" ")[0]}</span>` : ""}</h3>
           <div class="sub">${c.username ? "@" + escapeHtml(c.username) + " · " : ""}${escapeHtml(c.last_message || "пока тишина")}</div>
           ${c.tags && c.tags.length ? `<div class="tags-row">${c.tags.map((t) => `<span class="tag-pill" style="background:${t.color}">${escapeHtml(t.name)}</span>`).join("")}</div>` : ""}
         </div>
@@ -449,6 +449,7 @@ async function openContactSheet(chatId) {
     <div class="sheet-avatar" style="background:linear-gradient(135deg,${c1},${c2})">${escapeHtml(initialsFor(contact))}</div>
     <div style="font-size:19px;font-weight:800;">${escapeHtml(contact.first_name || "")} ${escapeHtml(contact.last_name || "")}</div>
     <div style="color:var(--hint);font-size:13px;">${contact.username ? "@" + escapeHtml(contact.username) : ""}</div>
+    ${contact.tone ? `<div style="font-size:13px;margin-top:4px;">${escapeHtml(contact.tone)}</div>` : ""}
     <div class="tags-row" id="sheet-tags" style="justify-content:center;margin-top:10px;"></div>
   `;
   document.getElementById("sheet-close").addEventListener("click", closeSheet);
@@ -469,6 +470,10 @@ async function openContactSheet(chatId) {
   });
 
   body.innerHTML = `
+    ${contact.ai_summary ? `<div style="font-size:13px;color:var(--hint);line-height:1.5;margin-bottom:10px;padding:10px 12px;background:var(--secondary-bg);border-radius:12px;">${escapeHtml(contact.ai_summary)}</div>` : ""}
+    <button class="btn-danger-ghost" id="refresh-summary" style="margin-bottom:10px;background:rgba(61,178,255,0.1);color:#3db2ff;">
+      ${contact.ai_summary ? "🔄 Обновить профиль" : "✨ Сгенерировать AI-профиль"}
+    </button>
     <textarea id="sheet-notes" class="form-input" placeholder="Заметка про контакт...">${escapeHtml(contact.notes || "")}</textarea>
     <div id="thread"></div>
     <button class="btn-danger-ghost" id="sheet-archive">Архивировать контакт</button>
@@ -476,6 +481,21 @@ async function openContactSheet(chatId) {
   document.getElementById("sheet-notes").addEventListener("blur", async (e) => {
     await api(`/api/contacts/${chatId}/notes`, { method: "POST", body: JSON.stringify({ notes: e.target.value }) });
     showToast("Заметка сохранена");
+  });
+  document.getElementById("refresh-summary").addEventListener("click", async (btn) => {
+    const el = document.getElementById("refresh-summary");
+    el.disabled = true;
+    el.textContent = "Анализирую...";
+    try {
+      const result = await api(`/api/contacts/${chatId}/refresh-summary`, { method: "POST" });
+      hapticSuccess();
+      showToast("Профиль обновлён");
+      openContactSheet(chatId);
+    } catch (e) {
+      el.disabled = false;
+      el.textContent = "🔄 Попробовать ещё раз";
+      showToast("Не удалось — мало данных или ошибка");
+    }
   });
   document.getElementById("sheet-archive").addEventListener("click", async () => {
     await api(`/api/contacts/${chatId}/archive`, { method: "POST", body: JSON.stringify({ archived: true }) });
