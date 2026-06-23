@@ -151,11 +151,11 @@ def transcribe_voice(audio_bytes: bytes, filename: str = "voice.ogg") -> str | N
 
 # --- анализ тональности ---
 
-_TONE_PROMPT = """Проанализируй тональность переписки ниже.
-Ответь ТОЛЬКО одним из трёх вариантов (без пояснений, только одно слово или эмодзи+слово):
-- 🟢 тёплая
-- 🟡 нейтральная
-- 🔴 напряжённая
+_TONE_PROMPT = """Проанализируй тональность переписки ниже между двумя людьми.
+Ответь ТОЛЬКО одним словом — без пунктуации, без эмодзи, без пояснений:
+тёплая
+нейтральная
+напряжённая
 
 Переписка:
 {messages}"""
@@ -165,18 +165,23 @@ def analyze_tone(messages: list[dict]) -> str:
     """Возвращает строку типа '🟢 тёплая' или '🔴 напряжённая'."""
     if not messages:
         return "🟡 нейтральная"
-    text = "\n".join(f"{'→' if m['role']=='assistant' else '←'} {m['content']}" for m in messages[-20:])
+    text = "\n".join(
+        f"{'→' if m['role'] == 'assistant' else '←'} {m['content']}"
+        for m in messages[-20:]
+    )
     try:
         result = _dispatch(
             _TONE_PROMPT.format(messages=text),
-            [{"role": "user", "content": "Определи тональность"}],
-            max_tokens=20,
+            [{"role": "user", "content": "Определи тональность одним словом"}],
+            max_tokens=10,
             temperature=0,
         )
-        result = result.strip().lower()
-        if "напряж" in result or "🔴" in result:
+        r = result.strip().lower()
+        # убираем пунктуацию и эмодзи для надёжного сравнения
+        r_clean = "".join(c for c in r if c.isalpha() or c == "ё")
+        if any(w in r_clean for w in ("напряж", "напряжен", "тяжел", "конфликт", "негатив")):
             return "🔴 напряжённая"
-        if "тёпл" in result or "тепл" in result or "🟢" in result:
+        if any(w in r_clean for w in ("тепл", "тёпл", "дружес", "позитив", "хорош", "радост")):
             return "🟢 тёплая"
         return "🟡 нейтральная"
     except Exception:
@@ -185,24 +190,31 @@ def analyze_tone(messages: list[dict]) -> str:
 
 # --- профиль контакта ---
 
-_SUMMARY_PROMPT = """На основе переписки ниже составь очень короткое описание (2-3 предложения) этого контакта.
-Кто он, о чём вы обычно общаетесь, какой характер общения.
-Пиши от первого лица (как будто описываешь сам себе: "Коллега по...", "Друг с которым...").
+_SUMMARY_PROMPT = """На основе переписки ниже составь очень короткое описание (2-3 предложения) контакта по имени {contact_name}.
+Определи кто это (коллега, друг, партнёр, муж/жена и т.п.) и напиши в правильном роде и числе.
+О чём вы обычно общаетесь, какой характер общения.
+Пиши от первого лица: "Муж/жена с которым/которой...", "Друг/подруга с кем...", "Коллега по работе..."
 Только русский язык, без лишних слов, без перечислений с тире.
+
+Имя контакта: {contact_name}
 
 Переписка (→ это мои ответы, ← это их сообщения):
 {messages}"""
 
 
-def generate_contact_summary(messages: list[dict]) -> str | None:
+def generate_contact_summary(messages: list[dict], contact_name: str = "") -> str | None:
     """Генерирует 2-3 предложения о контакте на основе переписки."""
     if len(messages) < 6:
         return None
-    text = "\n".join(f"{'→' if m['role']=='assistant' else '←'} {m['content']}" for m in messages[-30:])
+    text = "\n".join(
+        f"{'→' if m['role'] == 'assistant' else '←'} {m['content']}"
+        for m in messages[-30:]
+    )
+    name = contact_name or "Контакт"
     try:
         result = _dispatch(
-            _SUMMARY_PROMPT.format(messages=text),
-            [{"role": "user", "content": "Составь описание контакта"}],
+            _SUMMARY_PROMPT.format(messages=text, contact_name=name),
+            [{"role": "user", "content": f"Составь описание контакта {name}"}],
             max_tokens=200,
             temperature=0.3,
         )
