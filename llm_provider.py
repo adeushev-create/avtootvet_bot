@@ -126,3 +126,97 @@ def extract_task(text: str) -> dict | None:
         return None
 
     return {"title": title, "due_at": data.get("due_at")}
+
+
+# --- транскрипция голосовых ---
+
+def transcribe_voice(audio_bytes: bytes, filename: str = "voice.ogg") -> str | None:
+    """Транскрибирует голосовое сообщение через Groq Whisper (бесплатно).
+    Возвращает текст или None при ошибке."""
+    if settings.llm_provider != "groq" or not settings.groq_api_key:
+        return None
+    try:
+        from groq import Groq
+        client = Groq(api_key=settings.groq_api_key)
+        result = client.audio.transcriptions.create(
+            file=(filename, audio_bytes),
+            model="whisper-large-v3",
+            language="ru",
+            response_format="text",
+        )
+        return result.strip() if isinstance(result, str) else result.text.strip()
+    except Exception:
+        return None
+
+
+# --- анализ тональности ---
+
+_TONE_PROMPT = """Проанализируй тональность переписки ниже.
+Ответь ТОЛЬКО одним из трёх вариантов (без пояснений, только одно слово или эмодзи+слово):
+- 🟢 тёплая
+- 🟡 нейтральная
+- 🔴 напряжённая
+
+Переписка:
+{messages}"""
+
+
+def analyze_tone(messages: list[dict]) -> str:
+    """Возвращает строку типа '🟢 тёплая' или '🔴 напряжённая'."""
+    if not messages:
+        return "🟡 нейтральная"
+    text = "\n".join(f"{'→' if m['role']=='assistant' else '←'} {m['content']}" for m in messages[-20:])
+    try:
+        result = _dispatch(
+            _TONE_PROMPT.format(messages=text),
+            [{"role": "user", "content": "Определи тональность"}],
+            max_tokens=20,
+            temperature=0,
+        )
+        result = result.strip().lower()
+        if "напряж" in result or "🔴" in result:
+            return "🔴 напряжённая"
+        if "тёпл" in result or "тепл" in result or "🟢" in result:
+            return "🟢 тёплая"
+        return "🟡 нейтральная"
+    except Exception:
+        return "🟡 нейтральная"
+
+
+# --- профиль контакта ---
+
+_SUMMARY_PROMPT = """На основе переписки ниже составь очень короткое описание (2-3 предложения) этого контакта.
+Кто он, о чём вы обычно общаетесь, какой характер общения.
+Пиши от первого лица (как будто описываешь сам себе: "Коллега по...", "Друг с которым...").
+Только русский язык, без лишних слов, без перечислений с тире.
+
+Переписка (→ это мои ответы, ← это их сообщения):
+{messages}"""
+
+
+def generate_contact_summary(messages: list[dict]) -> str | None:
+    """Генерирует 2-3 предложения о контакте на основе переписки."""
+    if len(messages) < 6:
+        return None
+    text = "\n".join(f"{'→' if m['role']=='assistant' else '←'} {m['content']}" for m in messages[-30:])
+    try:
+        result = _dispatch(
+            _SUMMARY_PROMPT.format(messages=text),
+            [{"role": "user", "content": "Составь описание контакта"}],
+            max_tokens=200,
+            temperature=0.3,
+        )
+        return result.strip() or None
+    except Exception:
+        return None
+
+
+# --- A/B тест: два варианта ответа ---
+
+def generate_reply_pair(system_prompt: str, history: list[dict], incoming_text: str) -> tuple[str, str]:
+    """Генерирует два разных варианта ответа с разными температурами.
+    Возвращает (вариант_A, вариант_B)."""
+    messages = history + [{"role": "user", "content": incoming_text}]
+    variant_a = _dispatch(system_prompt, messages, max_tokens=400, temperature=0.5)
+    variant_b = _dispatch(system_prompt, messages, max_tokens=400, temperature=0.9)
+    return variant_a.strip(), variant_b.strip()
