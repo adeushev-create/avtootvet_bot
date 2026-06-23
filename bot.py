@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import random
 import re
 from datetime import datetime, timedelta, timezone
 
@@ -408,15 +409,16 @@ async def _flush_and_reply(chat_id: int, business_connection_id: str | None, con
 
     try:
         reply_text = generate_reply(system_prompt, history, combined_text)
-    except Exception:
+    except Exception as exc:
         logger.exception("Ошибка при обращении к LLM (%s)", settings.llm_provider)
-        reply_text = None
+        if _is_rate_limit_error(exc):
+            for t in texts:
+                db.add_message(chat_id, "user", t)
+            await _send_rate_limit_fallback(chat_id, profile, combined_text, contact_label, business_connection_id)
+        return
 
     for t in texts:
         db.add_message(chat_id, "user", t)
-
-    if reply_text is None:
-        return
 
     reply_text = _strip_unexpected_scripts(reply_text)
     reply_text = humanize(reply_text, settings.typo_probability, settings.casual_probability)
@@ -455,6 +457,64 @@ async def _flush_and_reply(chat_id: int, business_connection_id: str | None, con
         )
 
     asyncio.create_task(_update_tone_and_summary_bg(chat_id))
+
+_RATE_LIMIT_REPLIES: dict[str, list[str]] = {
+    "friends": [
+        "бро, занят щас, отвечу чуть позже",
+        "чет занят, напишу позже",
+        "не могу сейчас, позже",
+    ],
+    "wife": [
+        "занят, напишу скоро",
+        "не могу сейчас, позже отвечу",
+        "чуть позже ок?",
+    ],
+    "work": [
+        "сейчас занят, отвечу в ближайшее время",
+        "не могу ответить прямо сейчас, напишу позже",
+        "занят, вернусь к этому чуть позже",
+    ],
+    "startup": [
+        "сейчас не могу ответить, вернусь позже",
+        "занят, напишу как освобожусь",
+        "не могу сейчас, отвечу позже",
+    ],
+    "default": [
+        "сейчас занят, отвечу позже",
+        "не могу ответить прямо сейчас",
+        "напишу позже",
+    ],
+}
+
+def _get_rate_limit_reply(profile: str) -> str:
+    options = _RATE_LIMIT_REPLIES.get(profile, _RATE_LIMIT_REPLIES["default"])
+    return random.choice(options)
+
+def _is_rate_limit_error(exc: Exception) -> bool:
+    msg = str(exc).lower()
+    return "429" in msg or "rate_limit" in msg or "rate limit" in msg or "tokens per day" in msg
+
+
+async def _send_rate_limit_fallback(
+    chat_id: int, profile: str, combined_text: str,
+    contact_label: str, business_connection_id: str | None
+) -> None:
+    """Отправляет заглушку когда Groq исчерпал дневной лимит токенов."""
+    fallback = _get_rate_limit_reply(profile)
+    await bot.send_message(
+        chat_id=chat_id,
+        text=fallback,
+        business_connection_id=business_connection_id,
+    )
+    db.add_message(chat_id, "assistant", fallback, mode="auto")
+    if settings.owner_user_id:
+        await bot.send_message(
+            settings.owner_user_id,
+            f"⚠️ Groq rate limit — закончились токены на сегодня.\n"
+            f"💬 {contact_label} написал: {_truncate(combined_text)}\n"
+            f"Отправил заглушку: «{fallback}»\n\n"
+            f"Лимит обновится через ~11 минут или к следующему дню."
+        )
 
 
 @dp.business_message()
