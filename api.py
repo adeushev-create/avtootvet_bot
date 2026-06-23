@@ -171,8 +171,13 @@ async def api_send_draft(message_id: int, _=Depends(require_owner)):
 async def api_refresh_summary(chat_id: int, _=Depends(require_owner)):
     """Генерирует/обновляет AI-профиль контакта по текущей переписке."""
     from llm_provider import generate_contact_summary, analyze_tone
+    contact = db.get_contact(chat_id)
+    contact_name = ""
+    if contact:
+        parts = [contact.get("first_name") or "", contact.get("last_name") or ""]
+        contact_name = " ".join(p for p in parts if p).strip()
     messages = db.get_messages_for_analysis(chat_id)
-    summary = generate_contact_summary(messages)
+    summary = generate_contact_summary(messages, contact_name=contact_name)
     if summary:
         db.update_contact_summary(chat_id, summary)
     tone = analyze_tone(messages)
