@@ -167,6 +167,27 @@ async def api_send_draft(message_id: int, _=Depends(require_owner)):
     return {"ok": True}
 
 
+@app.post("/api/contacts/{chat_id}/refresh-summary")
+async def api_refresh_summary(chat_id: int, _=Depends(require_owner)):
+    """Генерирует/обновляет AI-профиль контакта по текущей переписке."""
+    from llm_provider import generate_contact_summary, analyze_tone
+    messages = db.get_messages_for_analysis(chat_id)
+    summary = generate_contact_summary(messages)
+    if summary:
+        db.update_contact_summary(chat_id, summary)
+    tone = analyze_tone(messages)
+    db.update_contact_tone(chat_id, tone)
+    return {"summary": summary, "tone": tone}
+
+
+@app.get("/api/contacts/{chat_id}/summary")
+def api_get_summary(chat_id: int, _=Depends(require_owner)):
+    contact = db.get_contact(chat_id)
+    if not contact:
+        raise HTTPException(status_code=404, detail="Контакт не найден")
+    return {"summary": contact.get("ai_summary"), "tone": contact.get("tone")}
+
+
 # Статика мини-аппа — подключаем последней, чтобы не перекрыть /api/* маршруты
 webapp_dir = Path(__file__).parent / "webapp"
 if webapp_dir.exists():
