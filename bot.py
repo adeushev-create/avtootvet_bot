@@ -500,22 +500,41 @@ async def _send_rate_limit_fallback(
     chat_id: int, profile: str, combined_text: str,
     contact_label: str, business_connection_id: str | None
 ) -> None:
-    """Отправляет заглушку когда Groq исчерпал дневной лимит токенов."""
+    """Уведомляет владельца о rate limit. В draft-режиме шлёт черновик с кнопкой Отправить."""
     fallback = _get_rate_limit_reply(profile)
-    await bot.send_message(
-        chat_id=chat_id,
-        text=fallback,
-        business_connection_id=business_connection_id,
-    )
-    db.add_message(chat_id, "assistant", fallback, mode="auto")
-    if settings.owner_user_id:
+
+    if settings.mode == "auto":
         await bot.send_message(
-            settings.owner_user_id,
-            f"⚠️ Groq rate limit — закончились токены на сегодня.\n"
-            f"💬 {contact_label} написал: {_truncate(combined_text)}\n"
-            f"Отправил заглушку: «{fallback}»\n\n"
-            f"Лимит обновится через ~11 минут или к следующему дню."
+            chat_id=chat_id,
+            text=fallback,
+            business_connection_id=business_connection_id,
         )
+        db.add_message(chat_id, "assistant", fallback, mode="auto")
+        if settings.owner_user_id:
+            await bot.send_message(
+                settings.owner_user_id,
+                f"⚠️ Groq rate limit — закончились токены на сегодня.\n"
+                f"💬 {contact_label} написал: {_truncate(combined_text)}\n"
+                f"Отправил заглушку: «{fallback}»\n\n"
+                f"Лимит обновится к следующему дню."
+            )
+    else:
+        # draft-режим: сохраняем заглушку как черновик, шлём тебе с кнопкой
+        if settings.owner_user_id:
+            draft_id = db.add_message(
+                chat_id, "assistant", fallback, mode="draft",
+                business_connection_id=business_connection_id
+            )
+            keyboard = InlineKeyboardMarkup(
+                inline_keyboard=[[InlineKeyboardButton(text="Отправить", callback_data=f"send:{draft_id}")]]
+            )
+            await bot.send_message(
+                settings.owner_user_id,
+                f"⚠️ Groq rate limit — закончились токены на сегодня.\n"
+                f"💬 {contact_label} написал: {_truncate(combined_text)}\n\n"
+                f"Черновик ответа:\n{fallback}",
+                reply_markup=keyboard,
+            )
 
 
 @dp.business_message()
