@@ -1,17 +1,20 @@
 import asyncio
 import logging
 import re
+from datetime import datetime, timedelta, timezone
 
 import uvicorn
 from aiogram import Dispatcher, F
 from aiogram.filters import Command
 from aiogram.types import (
+    Audio,
     BusinessConnection,
     CallbackQuery,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     MenuButtonWebApp,
     Message,
+    Voice,
     WebAppInfo,
 )
 
@@ -19,7 +22,7 @@ import db
 from api import app as api_app
 from config import settings
 from humanizer import humanize
-from llm_provider import extract_task, generate_reply
+from llm_provider import extract_task, generate_reply, generate_reply_pair, transcribe_voice, analyze_tone, generate_contact_summary
 from prompts import build_system_prompt
 from scheduler import reminder_loop
 from style_profile import load_style_description, load_style_examples
@@ -30,6 +33,39 @@ logger = logging.getLogger("secretary-bot")
 
 dp = Dispatcher()
 
+# --- Busy mode ---
+# Хранится в памяти + резервно в db (на случай рестарта бот всё равно потеряет состояние,
+# но при следующем incoming-сообщении проверит актуальность)
+_busy_until: datetime | None = None
+_busy_reason: str = ""
+
+
+def _is_busy() -> bool:
+    global _busy_until
+    if _busy_until is None:
+        return False
+    if datetime.now(timezone.utc) > _busy_until:
+        _busy_until = None
+        _busy_reason = ""
+        return False
+    return True
+
+
+def _parse_busy_duration(text: str) -> timedelta | None:
+    """Разбирает строку типа '2h', '30m', '1d', '90m'."""
+    m = re.match(r"(\d+)\s*([hHчmMмdDд])", text.strip())
+    if not m:
+        return None
+    n = int(m.group(1))
+    unit = m.group(2).lower()
+    if unit in ("h", "ч"):
+        return timedelta(hours=n)
+    if unit in ("m", "м"):
+        return timedelta(minutes=n)
+    if unit in ("d", "д"):
+        return timedelta(days=n)
+    return None
+
 
 @dp.message(Command("myid"))
 async def show_my_id(message: Message) -> None:
@@ -39,6 +75,45 @@ async def show_my_id(message: Message) -> None:
         f"Твой Telegram user_id: {message.from_user.id}\n\n"
         f"Впиши его в переменную OWNER_USER_ID на Railway."
     )
+
+
+@dp.message(Command("busy"))
+async def cmd_busy(message: Message) -> None:
+    global _busy_until, _busy_reason
+    if message.from_user is None or message.from_user.id != settings.owner_user_id:
+        return
+    text = (message.text or "").replace("/busy", "").strip()
+
+    # парсим время и причину: "/busy 2h на встрече"
+    duration = None
+    reason = ""
+    parts = text.split(None, 1) if text else []
+    if parts:
+        duration = _parse_busy_duration(parts[0])
+        reason = parts[1] if len(parts) > 1 else parts[0] if not duration else ""
+    if not duration:
+        duration = timedelta(hours=1)
+
+    _busy_until = datetime.now(timezone.utc) + duration
+    _busy_reason = reason.strip()
+
+    until_str = _busy_until.strftime("%H:%M")
+    reason_str = f" ({_busy_reason})" if _busy_reason else ""
+    await message.answer(
+        f"🔴 Режим «занят» до {until_str}{reason_str}\n"
+        f"Входящим буду отвечать автоматически с пометкой что занят.\n"
+        f"Напиши /free чтобы выключить раньше."
+    )
+
+
+@dp.message(Command("free"))
+async def cmd_free(message: Message) -> None:
+    global _busy_until, _busy_reason
+    if message.from_user is None or message.from_user.id != settings.owner_user_id:
+        return
+    _busy_until = None
+    _busy_reason = ""
+    await message.answer("🟢 Режим «занят» выключен, вернулся в обычный режим.")
 
 
 @dp.message(Command("crm"))
@@ -212,9 +287,25 @@ _pending_texts: dict[int, list[str]] = {}
 _pending_tasks: dict[int, asyncio.Task] = {}
 
 
+async def _update_tone_and_summary_bg(chat_id: int) -> None:
+    """Фоновая задача: обновляет тон и AI-профиль контакта после накопления сообщений."""
+    try:
+        messages = db.get_messages_for_analysis(chat_id)
+        msg_count = len(messages)
+        if msg_count < 4:
+            return
+        tone = analyze_tone(messages)
+        db.update_contact_tone(chat_id, tone)
+        if msg_count >= 6 and msg_count % settings.tone_update_interval == 0:
+            summary = generate_contact_summary(messages)
+            if summary:
+                db.update_contact_summary(chat_id, summary)
+    except Exception:
+        logger.exception("Ошибка при обновлении тона/профиля для чата %s", chat_id)
+
+
 async def _flush_and_reply(chat_id: int, business_connection_id: str | None, contact_label: str) -> None:
-    """Срабатывает после паузы без новых сообщений от этого собеседника — отвечает сразу
-    на всю накопленную пачку одним связным ответом, а не на каждое сообщение отдельно."""
+    """Срабатывает после паузы без новых сообщений от этого собеседника."""
     try:
         await asyncio.sleep(settings.message_debounce_seconds)
     except asyncio.CancelledError:
@@ -227,14 +318,72 @@ async def _flush_and_reply(chat_id: int, business_connection_id: str | None, con
 
     combined_text = "\n".join(texts)
 
-    history = db.get_history(chat_id, limit=10)
+    # --- busy mode ---
+    if _is_busy():
+        reason_part = f" — {_busy_reason}" if _busy_reason else ""
+        busy_reply = f"занят сейчас{reason_part}, отвечу позже"
+        if _busy_until:
+            busy_time = _busy_until.strftime("%H:%M")
+            busy_reply += f" (освобожусь около {busy_time})"
+        for t in texts:
+            db.add_message(chat_id, "user", t)
+        if settings.owner_user_id:
+            await bot.send_message(
+                settings.owner_user_id,
+                f"💬 {contact_label}\nСпросил(а): {_truncate(combined_text)}\n\n"
+                f"🔴 Ты в режиме «занят». Автоответ: «{busy_reply}»",
+            )
+        await bot.send_message(
+            chat_id=chat_id, text=busy_reply, business_connection_id=business_connection_id
+        )
+        db.add_message(chat_id, "assistant", busy_reply, mode="auto")
+        return
+
+    history = db.get_history(chat_id, limit=30)
     contact = db.get_contact(chat_id)
     profile = _resolve_style_profile(contact)
     style_description = load_style_description(profile)
     examples = load_style_examples(profile)
+
+    # подмешиваем одобренные варианты из A/B тестов в промпт
+    approved = db.get_recent_style_feedback(limit=10)
+    if approved:
+        examples = examples + approved
+
     system_prompt = build_system_prompt(settings.your_name, style_description, examples)
     system_prompt += _build_contact_context(chat_id, contact)
     system_prompt = _apply_swearing_rule(system_prompt, combined_text)
+
+    # A/B тест
+    if settings.ab_test_mode:
+        try:
+            variant_a, variant_b = generate_reply_pair(system_prompt, history, combined_text)
+            variant_a = _strip_unexpected_scripts(humanize(variant_a, settings.typo_probability, settings.casual_probability))
+            variant_b = _strip_unexpected_scripts(humanize(variant_b, settings.typo_probability, settings.casual_probability))
+            for t in texts:
+                db.add_message(chat_id, "user", t)
+            ab_id = db.create_ab_test(chat_id, variant_a, variant_b, business_connection_id)
+            if settings.owner_user_id:
+                keyboard = InlineKeyboardMarkup(inline_keyboard=[[
+                    InlineKeyboardButton(text="Отправить А", callback_data=f"ab:{ab_id}:a"),
+                    InlineKeyboardButton(text="Отправить Б", callback_data=f"ab:{ab_id}:b"),
+                ]])
+                contact_tone = (contact or {}).get("tone", "")
+                tone_str = f" {contact_tone}" if contact_tone else ""
+                await bot.send_message(
+                    chat_id=settings.owner_user_id,
+                    text=(
+                        f"💬 {contact_label}{tone_str}\n"
+                        f"Спросил(а): {_truncate(combined_text)}\n\n"
+                        f"🅰 Вариант А:\n{variant_a}\n\n"
+                        f"🅱 Вариант Б:\n{variant_b}"
+                    ),
+                    reply_markup=keyboard,
+                )
+            asyncio.create_task(_update_tone_and_summary_bg(chat_id))
+            return
+        except Exception:
+            logger.exception("Ошибка при генерации A/B вариантов, откат к обычному режиму")
 
     try:
         reply_text = generate_reply(system_prompt, history, combined_text)
@@ -242,7 +391,6 @@ async def _flush_and_reply(chat_id: int, business_connection_id: str | None, con
         logger.exception("Ошибка при обращении к LLM (%s)", settings.llm_provider)
         reply_text = None
 
-    # логируем каждое сообщение из пачки отдельной строкой — так тред в CRM выглядит естественно
     for t in texts:
         db.add_message(chat_id, "user", t)
 
@@ -250,11 +398,7 @@ async def _flush_and_reply(chat_id: int, business_connection_id: str | None, con
         return
 
     reply_text = _strip_unexpected_scripts(reply_text)
-    reply_text = humanize(
-        reply_text,
-        typo_probability=settings.typo_probability,
-        casual_probability=settings.casual_probability,
-    )
+    reply_text = humanize(reply_text, settings.typo_probability, settings.casual_probability)
 
     if settings.auto_extract_tasks:
         try:
@@ -264,6 +408,9 @@ async def _flush_and_reply(chat_id: int, business_connection_id: str | None, con
         except Exception:
             logger.exception("Ошибка при автоопределении задачи")
 
+    contact_tone = (contact or {}).get("tone", "")
+    tone_str = f" {contact_tone}" if contact_tone else ""
+
     if settings.mode == "draft" and settings.owner_user_id:
         draft_id = db.add_message(
             chat_id, "assistant", reply_text, mode="draft", business_connection_id=business_connection_id
@@ -271,23 +418,22 @@ async def _flush_and_reply(chat_id: int, business_connection_id: str | None, con
         keyboard = InlineKeyboardMarkup(
             inline_keyboard=[[InlineKeyboardButton(text="Отправить", callback_data=f"send:{draft_id}")]]
         )
-        notification = (
-            f"💬 {contact_label}\n"
-            f"Спросил(а): {_truncate(combined_text)}\n\n"
-            f"Черновик ответа:\n{reply_text}"
-        )
         await bot.send_message(
             chat_id=settings.owner_user_id,
-            text=notification,
+            text=(
+                f"💬 {contact_label}{tone_str}\n"
+                f"Спросил(а): {_truncate(combined_text)}\n\n"
+                f"Черновик ответа:\n{reply_text}"
+            ),
             reply_markup=keyboard,
         )
     else:
         db.add_message(chat_id, "assistant", reply_text, mode="auto")
         await bot.send_message(
-            chat_id=chat_id,
-            text=reply_text,
-            business_connection_id=business_connection_id,
+            chat_id=chat_id, text=reply_text, business_connection_id=business_connection_id
         )
+
+    asyncio.create_task(_update_tone_and_summary_bg(chat_id))
 
 
 @dp.business_message()
@@ -323,7 +469,24 @@ async def on_business_message(message: Message) -> None:
         return
 
     if not text:
-        return
+        # пробуем транскрибировать голосовое сообщение
+        if message.voice or message.audio:
+            voice_obj = message.voice or message.audio
+            try:
+                tg_file = await bot.get_file(voice_obj.file_id)
+                audio_bytes = await bot.download_file(tg_file.file_path)
+                transcribed = transcribe_voice(audio_bytes.read() if hasattr(audio_bytes, "read") else bytes(audio_bytes))
+                if transcribed:
+                    text = f"[голосовое] {transcribed}"
+                    logger.info("Транскрибировано голосовое от чата %s: %s", chat_id, text[:80])
+                else:
+                    logger.info("Не удалось транскрибировать голосовое от чата %s", chat_id)
+                    return
+            except Exception:
+                logger.exception("Ошибка при обработке голосового от чата %s", chat_id)
+                return
+        else:
+            return
 
     # копим короткую пачку: если за пару секунд прилетит ещё сообщение — ответим на всё сразу
     _pending_texts.setdefault(chat_id, []).append(text)
@@ -333,6 +496,51 @@ async def on_business_message(message: Message) -> None:
     _pending_tasks[chat_id] = asyncio.create_task(
         _flush_and_reply(chat_id, message.business_connection_id, contact_label)
     )
+
+
+@dp.callback_query(F.data.startswith("ab:"))
+async def on_ab_choice(callback: CallbackQuery) -> None:
+    if callback.from_user.id != settings.owner_user_id:
+        await callback.answer("Недоступно", show_alert=True)
+        return
+    try:
+        _, ab_id_str, choice = callback.data.split(":")
+        ab_id = int(ab_id_str)
+    except (ValueError, IndexError):
+        await callback.answer("Ошибка", show_alert=True)
+        return
+
+    test = db.get_ab_test(ab_id)
+    if not test:
+        await callback.answer("Тест не найден", show_alert=True)
+        return
+    if test.get("chosen"):
+        await callback.answer("Уже выбран вариант", show_alert=True)
+        return
+
+    db.resolve_ab_test(ab_id, choice)
+    chosen_text = test["variant_a"] if choice == "a" else test["variant_b"]
+
+    try:
+        await bot.send_message(
+            chat_id=test["chat_id"],
+            text=chosen_text,
+            business_connection_id=test["business_connection_id"],
+        )
+    except Exception:
+        logger.exception("Не удалось отправить A/B вариант")
+        await callback.answer("Не удалось отправить", show_alert=True)
+        return
+
+    db.add_message(test["chat_id"], "assistant", chosen_text, mode="auto")
+    if callback.message:
+        try:
+            await callback.message.edit_text(
+                f"✅ Отправлен вариант {'А' if choice == 'a' else 'Б'}:\n\n{chosen_text}"
+            )
+        except Exception:
+            pass
+    await callback.answer(f"Отправлен вариант {'А' if choice == 'a' else 'Б'}")
 
 
 @dp.callback_query(F.data.startswith("send:"))
