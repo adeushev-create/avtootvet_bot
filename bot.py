@@ -360,16 +360,10 @@ async def _flush_and_reply(chat_id: int, business_connection_id: str | None, con
 
     combined_text = "\n".join(texts)
 
-    # --- pause mode (молчим, токены не тратим) ---
+    # --- pause mode (молчим, токены не тратим, тебе ничего не шлём) ---
     if _paused:
         for t in texts:
             db.add_message(chat_id, "user", t)
-        if settings.owner_user_id:
-            await bot.send_message(
-                settings.owner_user_id,
-                f"⏸ {contact_label} написал: {_truncate(combined_text)}",
-                disable_notification=True,
-            )
         return
 
     # --- busy mode ---
