@@ -439,7 +439,8 @@ async def _flush_and_reply(chat_id: int, business_connection_id: str | None, con
         if _is_rate_limit_error(exc):
             for t in texts:
                 db.add_message(chat_id, "user", t)
-            await _send_rate_limit_fallback(chat_id, profile, combined_text, contact_label, business_connection_id)
+            if not _paused:
+                await _send_rate_limit_fallback(chat_id, profile, combined_text, contact_label, business_connection_id)
         return
 
     for t in texts:
