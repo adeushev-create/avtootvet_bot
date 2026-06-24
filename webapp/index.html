@@ -475,7 +475,7 @@ function renderContacts() {
       <div class="swipe-content contact-row">
         ${avatarHtml(c.chat_id, c)}
         <div class="meta">
-          <h3>${escapeHtml(c.first_name || "")} ${escapeHtml(c.last_name || "")} ${c.tone ? `<span style="font-size:12px;font-weight:400;">${c.tone.split(" ")[0]}</span>` : ""}</h3>
+          <h3>${escapeHtml(c.first_name || "")} ${escapeHtml(c.last_name || "")}</h3>
           <div class="sub">${c.username ? "@" + escapeHtml(c.username) + " · " : ""}${escapeHtml(c.last_message || "пока тишина")}</div>
           ${c.tags && c.tags.length ? `<div class="tags-row">${c.tags.map((t) => `<span class="tag-pill" style="background:${t.color}">${escapeHtml(t.name)}</span>`).join("")}</div>` : ""}
         </div>
@@ -529,7 +529,7 @@ async function openContactSheet(chatId) {
     <div class="sheet-avatar" style="background:linear-gradient(135deg,${c1},${c2})">${escapeHtml(initialsFor(contact))}</div>
     <div style="font-family:var(--display);font-size:21px;font-weight:700;">${escapeHtml(contact.first_name || "")} ${escapeHtml(contact.last_name || "")}</div>
     <div style="color:var(--hint);font-size:13px;">${contact.username ? "@" + escapeHtml(contact.username) : ""}</div>
-    ${contact.tone ? `<div style="font-size:13px;margin-top:4px;">${escapeHtml(contact.tone)}</div>` : ""}
+    
     <div class="tags-row" id="sheet-tags" style="justify-content:center;margin-top:12px;"></div>
   `;
   document.getElementById("sheet-close").addEventListener("click", closeSheet);
