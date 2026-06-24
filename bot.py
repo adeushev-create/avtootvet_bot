@@ -41,6 +41,9 @@ dp = Dispatcher()
 _busy_until: datetime | None = None
 _busy_reason: str = ""
 
+# --- Pause mode (токены не тратятся, собеседникам ничего не уходит) ---
+_paused: bool = False
+
 
 def _is_busy() -> bool:
     global _busy_until
@@ -137,6 +140,24 @@ async def cmd_free(message: Message) -> None:
     _busy_until = None
     _busy_reason = ""
     await message.answer("🟢 Режим «занят» выключен, вернулся в обычный режим.")
+
+
+@dp.message(Command("pause"))
+async def cmd_pause(message: Message) -> None:
+    global _paused
+    if message.from_user is None or message.from_user.id != settings.owner_user_id:
+        return
+    _paused = True
+    await message.answer("⏸ Бот на паузе — токены не тратятся, собеседникам ничего не уходит.\nНапиши /resume чтобы включить обратно.")
+
+
+@dp.message(Command("resume"))
+async def cmd_resume(message: Message) -> None:
+    global _paused
+    if message.from_user is None or message.from_user.id != settings.owner_user_id:
+        return
+    _paused = False
+    await message.answer("▶️ Бот снова активен, отвечает в обычном режиме.")
 
 
 @dp.message(Command("crm"))
@@ -340,6 +361,18 @@ async def _flush_and_reply(chat_id: int, business_connection_id: str | None, con
         return
 
     combined_text = "\n".join(texts)
+
+    # --- pause mode (молчим, токены не тратим) ---
+    if _paused:
+        for t in texts:
+            db.add_message(chat_id, "user", t)
+        if settings.owner_user_id:
+            await bot.send_message(
+                settings.owner_user_id,
+                f"⏸ {contact_label} написал: {_truncate(combined_text)}",
+                disable_notification=True,
+            )
+        return
 
     # --- busy mode ---
     if _is_busy():
