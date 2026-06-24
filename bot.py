@@ -24,7 +24,7 @@ import db
 from api import app as api_app
 from config import settings
 from humanizer import humanize
-from llm_provider import extract_task, generate_reply, generate_reply_pair, transcribe_voice, analyze_tone, generate_contact_summary
+from llm_provider import extract_task, generate_reply, generate_reply_pair, transcribe_voice, generate_contact_summary
 from prompts import build_system_prompt
 from scheduler import reminder_loop
 from style_profile import load_style_description, load_style_examples
@@ -332,20 +332,18 @@ _pending_tasks: dict[int, asyncio.Task] = {}
 
 
 async def _update_tone_and_summary_bg(chat_id: int) -> None:
-    """Фоновая задача: обновляет тон и AI-профиль контакта после накопления сообщений."""
+    """Фоновая задача: обновляет AI-профиль контакта после накопления сообщений."""
     try:
         messages = db.get_messages_for_analysis(chat_id)
         msg_count = len(messages)
-        if msg_count < 4:
+        if msg_count < 6:
             return
-        tone = analyze_tone(messages)
-        db.update_contact_tone(chat_id, tone)
-        if msg_count >= 6 and msg_count % settings.tone_update_interval == 0:
+        if msg_count % settings.tone_update_interval == 0:
             summary = generate_contact_summary(messages)
             if summary:
                 db.update_contact_summary(chat_id, summary)
     except Exception:
-        logger.exception("Ошибка при обновлении тона/профиля для чата %s", chat_id)
+        logger.exception("Ошибка при обновлении профиля для чата %s", chat_id)
 
 
 async def _flush_and_reply(chat_id: int, business_connection_id: str | None, contact_label: str) -> None:
@@ -424,12 +422,11 @@ async def _flush_and_reply(chat_id: int, business_connection_id: str | None, con
                     InlineKeyboardButton(text="Отправить А", callback_data=f"ab:{ab_id}:a"),
                     InlineKeyboardButton(text="Отправить Б", callback_data=f"ab:{ab_id}:b"),
                 ]])
-                contact_tone = (contact or {}).get("tone", "")
-                tone_str = f" {contact_tone}" if contact_tone else ""
+
                 await bot.send_message(
                     chat_id=settings.owner_user_id,
                     text=(
-                        f"💬 {contact_label}{tone_str}\n"
+                        f"💬 {contact_label}\n"
                         f"Спросил(а): {_truncate(combined_text)}\n\n"
                         f"🅰 Вариант А:\n{variant_a}\n\n"
                         f"🅱 Вариант Б:\n{variant_b}"
@@ -465,8 +462,7 @@ async def _flush_and_reply(chat_id: int, business_connection_id: str | None, con
         except Exception:
             logger.exception("Ошибка при автоопределении задачи")
 
-    contact_tone = (contact or {}).get("tone", "")
-    tone_str = f" {contact_tone}" if contact_tone else ""
+
 
     if settings.mode == "draft" and settings.owner_user_id:
         draft_id = db.add_message(
@@ -478,7 +474,7 @@ async def _flush_and_reply(chat_id: int, business_connection_id: str | None, con
         await bot.send_message(
             chat_id=settings.owner_user_id,
             text=(
-                f"💬 {contact_label}{tone_str}\n"
+                f"💬 {contact_label}\n"
                 f"Спросил(а): {_truncate(combined_text)}\n\n"
                 f"Черновик ответа:\n{reply_text}"
             ),
