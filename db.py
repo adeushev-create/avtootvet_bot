@@ -296,11 +296,16 @@ def get_history(chat_id: int, limit: int = 30) -> list[dict]:
 
 
 def get_assistant_messages(chat_id: int, limit: int = 15) -> list[str]:
-    """Твои прошлые ответы именно этому контакту (любой mode) — для персонализации
-    под конкретного человека, а не только общий профиль стиля."""
+    """Твои прошлые ОТПРАВЛЕННЫЕ ответы именно этому контакту — для персонализации
+    под конкретного человека, а не только общий профиль стиля.
+    Неотправленные черновики (mode='draft') исключаем намеренно: это неподтверждённые
+    догадки бота, а не то, как реально пишет Алексей. Если их включать, бот начинает
+    цитировать собственные черновики как образец → петля одинаковых ответов
+    ("та давай", "ну ладно" на любое входящее)."""
     with get_conn() as conn:
         rows = conn.execute(
-            "SELECT content FROM messages WHERE chat_id = ? AND role = 'assistant' ORDER BY id DESC LIMIT ?",
+            "SELECT content FROM messages WHERE chat_id = ? AND role = 'assistant' "
+            "AND mode != 'draft' ORDER BY id DESC LIMIT ?",
             (chat_id, limit),
         ).fetchall()
     return [r["content"] for r in rows][::-1]
