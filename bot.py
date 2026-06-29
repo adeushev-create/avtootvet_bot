@@ -91,6 +91,7 @@ async def cmd_abon(message: Message) -> None:
         "🅰🅱 A/B тест включён.\n\n"
         "Теперь на каждое входящее сообщение буду присылать два варианта ответа с кнопками «Отправить А» и «Отправить Б». "
         "Тот, что выберешь — уйдёт собеседнику и запомнится как образец для следующих ответов.\n\n"
+        "⚠️ Расход токенов удваивается (два варианта на каждое сообщение).\n"
         "Выключить: /aboff"
     )
 
@@ -212,6 +213,22 @@ async def on_business_connection(connection: BusinessConnection) -> None:
 _SWEAR_WORDS = ("бля", "хуй", "хуе", "пизд", "ебат", "ебал", "ебан", "сука", "нахуй", "ахуе", "охуен", "мудак", "пидор")
 _CJK_PATTERN = re.compile(r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af]")
 
+# Маркеры "тут возможно дело/договорённость". extract_task (отдельный вызов LLM)
+# запускается ТОЛЬКО если входящее совпало с этим паттерном — болтовня ("ок", "спс",
+# "привет") до LLM не доходит и токены не жжёт. Явный "запомни ..." работает отдельно.
+_TASK_HINT_PATTERN = re.compile(
+    r"(?:\bнадо\b|\bнужно\b|\bдавай\b|скин|пришл|отправ|сдела|можешь|сможешь|перезвон|позвон|"
+    r"набери|напомн|не забуд|договор|встрет|встреч|созвон|запиш|оплат|куп(?:и|ишь|им)|заброн|"
+    r"подтверд|провер|вышл|дедлайн|до завтра|завтра|послезавтра|понедельник|вторник|сред[ауы]|"
+    r"четверг|пятниц|суббот|воскресен|в \d{1,2}[:.]\d{2}|в \d{1,2} час|через \d|на следующей|на выходн)",
+    re.IGNORECASE,
+)
+
+
+def _looks_like_task(text: str) -> bool:
+    """Дешёвый локальный пред-фильтр перед дорогим extract_task."""
+    return bool(_TASK_HINT_PATTERN.search(text or ""))
+
 
 def _contains_swearing(text: str) -> bool:
     lowered = text.lower()
@@ -262,16 +279,14 @@ def _build_contact_context(chat_id: int, contact: dict | None) -> str:
     """Персональный контекст для конкретного собеседника.
     НЕ дублирует историю чата — та уже передаётся отдельно через messages.
     Здесь: устойчивые паттерны твоего письма именно этому человеку + правило про имя."""
-    past_replies = db.get_assistant_messages(chat_id, limit=30)
+    past_replies = db.get_assistant_messages(chat_id, limit=settings.contact_context_limit)
     if not past_replies:
         return ""
 
     first_name = ((contact or {}).get("first_name") or "").strip()
     name_used_before = bool(first_name) and any(first_name.lower() in r.lower() for r in past_replies)
 
-    # берём только последние 15 для примеров — не переполняем промпт
-    sample = past_replies[-15:]
-    examples_block = "\n".join(f"- {r}" for r in sample)
+    examples_block = "\n".join(f"- {r}" for r in past_replies)
 
     name_note = (
         f'Ты уже обращался к этому человеку по имени "{first_name}" раньше — можешь и сейчас.'
@@ -281,7 +296,7 @@ def _build_contact_context(chat_id: int, contact: dict | None) -> str:
 
     return (
         f"\n\n---\nКАК ТЫ ОБЫЧНО ПИШЕШЬ ИМЕННО ЭТОМУ ЧЕЛОВЕКУ "
-        f"(твои реальные прошлые реплики ему, {len(past_replies)} всего, показаны последние {len(sample)}):\n"
+        f"(твои реальные прошлые реплики ему, последние {len(past_replies)}):\n"
         f"{examples_block}\n\n"
         f"Используй эти примеры как ориентир по тону, длине, лексике для ЭТОГО конкретного человека — "
         f"они важнее общего профиля стиля, потому что отражают именно эти отношения.\n"
@@ -331,17 +346,21 @@ _pending_texts: dict[int, list[str]] = {}
 _pending_tasks: dict[int, asyncio.Task] = {}
 
 
-async def _update_tone_and_summary_bg(chat_id: int) -> None:
-    """Фоновая задача: обновляет AI-профиль контакта после накопления сообщений."""
+async def _update_summary_bg(chat_id: int) -> None:
+    """Генерирует AI-профиль контакта ОДИН раз, когда накопилось достаточно сообщений.
+    Дальше профиль не пересчитывается на каждое сообщение — обновить можно вручную
+    кнопкой в Mini App. Так профиль остаётся, но не жжёт токены постоянно."""
     try:
-        messages = db.get_messages_for_analysis(chat_id)
-        msg_count = len(messages)
-        if msg_count < 6:
+        contact = db.get_contact(chat_id)
+        if contact and (contact.get("ai_summary") or "").strip():
+            return  # профиль уже есть — не тратим токены повторно
+        messages = db.get_messages_for_analysis(chat_id, limit=settings.summary_context_limit)
+        if len(messages) < 6:
             return
-        if msg_count % settings.tone_update_interval == 0:
-            summary = generate_contact_summary(messages)
-            if summary:
-                db.update_contact_summary(chat_id, summary)
+        first_name = ((contact or {}).get("first_name") or "").strip()
+        summary = generate_contact_summary(messages, contact_name=first_name)
+        if summary:
+            db.update_contact_summary(chat_id, summary)
     except Exception:
         logger.exception("Ошибка при обновлении профиля для чата %s", chat_id)
 
@@ -387,14 +406,14 @@ async def _flush_and_reply(chat_id: int, business_connection_id: str | None, con
         db.add_message(chat_id, "assistant", busy_reply, mode="auto")
         return
 
-    history = db.get_history(chat_id, limit=30)
+    history = db.get_history(chat_id, limit=settings.reply_history_limit)
     contact = db.get_contact(chat_id)
     profile = _resolve_style_profile(contact)
     style_description = load_style_description(profile)
     examples = load_style_examples(profile)
 
     # подмешиваем одобренные варианты из A/B тестов в промпт
-    approved = db.get_recent_style_feedback(limit=10)
+    approved = db.get_recent_style_feedback(limit=settings.style_feedback_limit)
     if approved:
         examples = examples + approved
 
@@ -427,7 +446,7 @@ async def _flush_and_reply(chat_id: int, business_connection_id: str | None, con
                     ),
                     reply_markup=keyboard,
                 )
-            asyncio.create_task(_update_tone_and_summary_bg(chat_id))
+            asyncio.create_task(_update_summary_bg(chat_id))
             return
         except Exception:
             logger.exception("Ошибка при генерации A/B вариантов, откат к обычному режиму")
@@ -449,15 +468,15 @@ async def _flush_and_reply(chat_id: int, business_connection_id: str | None, con
     reply_text = _strip_unexpected_scripts(reply_text)
     reply_text = humanize(reply_text, settings.typo_probability, settings.casual_probability)
 
-    if settings.auto_extract_tasks:
+    # авто-определение задачи. Дорогой вызов LLM делаем только если в тексте есть маркер дела —
+    # иначе на каждое "ок"/"спс" уходил лишний запрос и съедал лимит.
+    if settings.auto_extract_tasks and _looks_like_task(combined_text):
         try:
             extracted = extract_task(combined_text)
             if extracted:
                 db.create_task(extracted["title"], extracted["due_at"], chat_id=chat_id, source="auto")
         except Exception:
             logger.exception("Ошибка при автоопределении задачи")
-
-
 
     if settings.mode == "draft" and settings.owner_user_id:
         draft_id = db.add_message(
@@ -481,7 +500,7 @@ async def _flush_and_reply(chat_id: int, business_connection_id: str | None, con
             chat_id=chat_id, text=reply_text, business_connection_id=business_connection_id
         )
 
-    asyncio.create_task(_update_tone_and_summary_bg(chat_id))
+    asyncio.create_task(_update_summary_bg(chat_id))
 
 _RATE_LIMIT_REPLIES: dict[str, list[str]] = {
     "friends": [
